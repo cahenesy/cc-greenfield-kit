@@ -1,5 +1,6 @@
 {
   "name": "cc-greenfield-kit",
+  "description": "Greenfield development kit: a PRD/TDD/ADR design-doc pipeline with phase-gate PRs, toolchain bootstrap, review subagents, and unattended batch implementation.",
   "owner": { "name": "Chris Henesy" },
   "plugins": [
     {

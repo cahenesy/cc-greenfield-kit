@@ -1,12 +1,12 @@
 ---
 name: bootstrap-project
-description: Set up a project's toolchain (linter, formatter, test framework) and verify it end-to-end when starting work on a throughline or brownfield project. Invoke with /bootstrap-project. Say "skip setup" to bypass.
+description: Set up a project's toolchain (linter, formatter, test framework) and verify it end-to-end when starting work on a greenfield or brownfield project. Invoke with /bootstrap-project. Say "skip setup" to bypass.
 disable-model-invocation: true
 ---
 
 # Project setup
 
-Run when starting work on a project. Determine whether it is **throughline**
+Run when starting work on a project. Determine whether it is **greenfield**
 (empty: no source files, fresh or absent package-manager init) or
 **brownfield** (existing code), then follow the matching path. If the user
 says "skip setup", stop and do nothing.
@@ -29,7 +29,7 @@ automatically after edits **when a linter is configured for the project** —
 it no-ops otherwise, so it never forces tooling onto a repo. Your job here is
 to make sure a linter/formatter is actually configured, per these rules:
 
-- **Throughline:** install the default formatter + linter for the language and
+- **Greenfield:** install the default formatter + linter for the language and
   create minimal config files.
 - **Brownfield, tooling already configured:** use what is there; do not swap
   it out.
@@ -44,7 +44,7 @@ failure for correction rather than reverting it.
 
 ## Unit testing
 
-- **Throughline:** install the default test framework and write one trivial
+- **Greenfield:** install the default test framework and write one trivial
   passing test, then run it to confirm the setup works end-to-end.
 - **Brownfield with existing tests:** use the framework already in use. New
   code must ship with new tests; modified code must have its tests updated.
@@ -75,7 +75,7 @@ Create the structure the PRD/TDD/ADR pipeline expects, if absent:
   is **transient input** that throughline ingests but never treats as authoritative
   or relocates. Leave any existing `docs/superpowers/` content untouched.
 
-## Throughline initialization checklist
+## Greenfield initialization checklist
 
 When the project is empty:
 

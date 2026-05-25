@@ -18,6 +18,14 @@ PRD → TDD → ADR design-doc pipeline with phase-gate PRs and gated, unattende
 implementation. It owns governance and traceability and **depends on / delegates**
 discovery + engineering to the official plugins (see ADRs 0001–0003).
 
+Two principles run through that overlay. First, **verification is runtime
+observation at the surface** — confirming the *real artifact* behaves where a user
+(human or programmatic) meets it — which is distinct from tests/typechecks (CI's
+job); throughline carries verification from the PRD forward, not as an
+afterthought, while leaving the verification *mechanism* to the project. Second,
+because gated builds run unattended and detached, the human keeps **live
+visibility** into a run without leaving the session.
+
 ## Users & goals
 
 - **Primary user:** a developer using Claude Code who wants design-docs-before-code
@@ -52,8 +60,9 @@ independently verifiable.
   numbered and independently testable; it records non-goals, constraints, and open
   questions, leaving unresolved items open rather than inventing answers.
 - **FR-5 PRD rigor.** It runs a scope-decomposition check (split multi-product asks),
-  applies YAGNI, and runs an inline self-review (placeholder / consistency / scope /
-  ambiguity) before opening the PR.
+  applies YAGNI, ensures each requirement carries an observable acceptance criterion
+  (see FR-24), and runs an inline self-review (placeholder / consistency / scope /
+  ambiguity / missing-acceptance-criterion) before opening the PR.
 - **FR-6 PRD phase gate.** It commits to a `docs/prd/<slug>` branch and opens a PRD
   PR; it never auto-merges (the human merge approves requirements and anchors the
   diff the design step reads).
@@ -66,14 +75,16 @@ independently verifiable.
 - **FR-8 TDD content + traceability.** Each TDD is written `Status: draft` with a
   requirement-traceability table (every in-scope FR/NFR → design element), a
   "dependencies considered" section requiring ≥1 concrete rejected alternative per new
-  dependency, and no placeholder / hand-waving design content.
+  dependency, a verification plan (see FR-23), and no placeholder / hand-waving design
+  content.
 - **FR-9 ADR evaluation + creation.** `/tdd-author` evaluates the design against
   existing ADRs and, on approval, records durable decisions via `/adr-new`. Only
   `accepted` ADRs bind new TDDs.
 - **FR-10 Self-review + independent design-critique gate.** Before opening the design
   PR it self-reviews, then spawns the `design-reviewer` (fresh context, different
   model) which blocks on untraced requirements, under-specified interfaces, a missing
-  alternatives analysis, or ADR conflicts; the verdict rides in the PR body.
+  alternatives analysis, a missing or non-actionable verification plan (see FR-23), or
+  ADR conflicts; the verdict rides in the PR body.
 - **FR-11 Design phase gate.** It commits the TDD set + any promoted ADRs together on
   a `docs/design/<slug>` branch and opens the design PR; it never auto-merges.
 
@@ -91,13 +102,16 @@ independently verifiable.
   processes, each in a dedicated git worktree, so the runner never touches the live
   working tree or session. Modes: sequential (default; stacked, one PR per TDD),
   `--combined` (one PR), `--parallel` (one worktree/PR per feature).
-- **FR-15 Three independent gates.** A TDD flips to `implemented` only after (a)
+- **FR-15 Four independent gates.** A TDD flips to `implemented` only after (a)
   failing-test-first discipline — a `test(failing):` commit precedes the
   implementation, following `superpowers:test-driven-development`; (b) a mechanical
-  `verify.sh` re-run of tests + typecheck + linter; and (c) an independent review in a
-  separate process on a different model (`pr-review-toolkit:code-reviewer` +
-  `silent-failure-hunter` + `throughline:security-reviewer`) returning
-  `REVIEW_RESULT: PASS`. Self-reported success is not trusted.
+  `verify.sh` re-run of tests + typecheck + linter (this is CI's job — running tests,
+  not verification); (c) runtime verification — the real artifact is driven to where
+  the change is observable and the TDD's verification observations hold (see FR-25);
+  and (d) an independent review in a separate process on a different model
+  (`pr-review-toolkit:code-reviewer` + `silent-failure-hunter` +
+  `throughline:security-reviewer`) returning `REVIEW_RESULT: PASS`. Self-reported
+  success is not trusted.
 - **FR-16 Never merges; halt-on-failure.** `/implement` opens PRs but never merges. In
   sequential mode a failed gate halts the run and marks downstream TDDs `BLOCKED`
   rather than building on a broken base.
@@ -115,6 +129,61 @@ independently verifiable.
   project's dependencies first (package-manager-aware) since a worktree carries no
   gitignored `node_modules`; opt out with `THROUGHLINE_SKIP_DEPS=1`.
 
+### Verification (runtime observation at the surface)
+Verification — confirming the *real artifact* behaves where a user (human or
+programmatic) meets it — is distinct from tests/typechecks (CI's job) and is carried
+from the PRD forward. throughline owns the *governance* of verification; the
+*mechanism* is the project's.
+
+- **FR-23 TDD verification plan.** Each TDD includes a verification plan: the change's
+  observable surface, the observation points (scenarios that drive the changed code to
+  where it executes), and the invariants / expected observations that constitute PASS.
+  It is artifact-appropriate (CLI stdout, HTTP responses, library return values, log
+  lines, DOM, …); the mechanism is delegated (FR-26). — Acceptance: a TDD lacking a
+  verification plan fails FR-10's design-critique gate.
+- **FR-24 PRD observable acceptance criteria.** Each PRD requirement carries an
+  acceptance criterion phrased as an observation of the real artifact's surface, not
+  "a test exists"; `/prd-author` enforces this for new requirements (FR-5). —
+  Acceptance: every requirement added at or after this update states an observable
+  acceptance criterion (this update's FR-23–FR-30 included).
+- **FR-25 Runtime-verification gate.** `/implement` runs a verification gate distinct
+  from `verify.sh`: it drives the built artifact to where the change is observable and
+  confirms the TDD's verification observations hold, capturing the evidence. A TDD
+  flips to `implemented` only if verification is PASS — passing tests alone is
+  insufficient. A change with genuinely no observable surface (e.g. an internal
+  refactor) may be recorded `SKIP` with justification, never silently (NFR-4). —
+  Acceptance: a TDD whose runtime verification is FAIL or BLOCKED does not flip to
+  `implemented` and is reported as such.
+- **FR-26 Verification is governed, not bundled.** throughline owns the *requirement*
+  that a verification plan exists (FR-23), is executed, and yields evidence (FR-25); it
+  does not ship a verification harness/framework. The mechanism is delegated to the
+  project and to `superpowers:verification-before-completion` / the `/verify` skill
+  (FR-22, ADR 0002). — Acceptance: no verification framework is vendored into consumer
+  repos by throughline.
+
+### Run progress visibility
+- **FR-27 Structured run state.** A running `/implement` maintains a structured,
+  machine-readable record of run state — per TDD: queue position, status (pending /
+  building / verifying / reviewing / done / failed / blocked / skipped), current stage,
+  and timestamps; plus a run-level rollup — as the single source of truth a progress
+  view reads. — Acceptance: at any point during a run the record reflects the run's
+  actual per-TDD state.
+- **FR-28 Progress snapshot.** From within the Claude Code TUI the user can get an
+  on-demand snapshot: completed / total TDDs, an estimate-labeled percent (TDD- and
+  current-stage-aware), the current TDD and its stage, per-TDD statuses, elapsed time,
+  and log / PR pointers. — Acceptance: invoking it during a run prints a summary
+  matching FR-27's record; invoking it with no active run says so plainly.
+- **FR-29 Live follow mode.** A live/follow mode continuously refreshes the same view,
+  realized so the user can enter and leave it without ending the session or
+  interrupting the (detached) build. It is provided because that is feasible in the TUI
+  as a read-only, interruptible watch; where an environment cannot support it, the
+  snapshot (FR-28) satisfies the need. — Acceptance: entering and exiting the live view
+  leaves the running build unaffected and the session intact.
+- **FR-30 Honest, read-only progress.** The percent is presented as an estimate, never
+  implying deterministic precision (NFR-4); the view is read-only observability and
+  does not control the run (no pause / resume / cancel). — Acceptance: the view never
+  reports 100% before all in-scope TDDs are terminal, and offers no run-control action.
+
 ### Quality hook & delegation
 - **FR-21 Format + lint hook.** A `format-and-lint` PostToolUse hook formats then
   lints edited files when a linter is configured (no-op otherwise), debounced, for
@@ -123,8 +192,10 @@ independently verifiable.
 - **FR-22 Layer-on-top delegation.** throughline depends on `superpowers` +
   `pr-review-toolkit` (declared cross-marketplace dependencies) and delegates
   discovery (`brainstorming`) and generic engineering (TDD, code review, the `Explore`
-  agent) to them and to built-ins; on-demand code review is `/code-review` +
-  `/review-pr`. `docs/PRD.md` + `docs/tdd/` + `docs/adr/` are canonical;
+  agent, and the verification *mechanism* — see FR-26) to them and to built-ins
+  (`superpowers:verification-before-completion`, the `/verify` skill); on-demand code
+  review is `/code-review` + `/review-pr`. `docs/PRD.md` + `docs/tdd/` + `docs/adr/`
+  are canonical;
   `docs/superpowers/*` is transient input — ingested, never relocated.
 
 ### Non-functional
@@ -135,9 +206,11 @@ independently verifiable.
 - **NFR-3 Model diversity.** Builds run on the best model (opus default); the review
   gate runs on a different model (sonnet default) so the reviewer does not share the
   author's blind spots. Overridable via flags/env.
-- **NFR-4 Verdict honesty.** Outcomes distinguish `PASS` / `FAIL` / `BLOCKED` —
-  "couldn't complete" and "design-infeasible" are not conflated with
-  "observed and wrong".
+- **NFR-4 Verdict honesty.** Outcomes — including runtime verification (FR-25) —
+  distinguish `PASS` / `FAIL` / `BLOCKED` / `SKIP`: "couldn't observe" (BLOCKED),
+  "nothing to observe" (SKIP), and "design-infeasible" are never conflated with
+  "observed and wrong" (FAIL). Ambiguity resolves to FAIL, never to a false PASS, and
+  progress estimates are labeled as estimates (FR-30).
 - **NFR-5 Centrally maintained.** Scripts and skills run from the plugin cache (not
   vendored into consumer repos), so updates reach every project.
 
@@ -152,6 +225,13 @@ independently verifiable.
   (the step-level discipline lives in `/implement`).
 - First-class support for **non-git / no-remote** workflows beyond a basic "skip git"
   escape hatch.
+- **Bundling a verification harness/framework** — the verification *mechanism* (DOM,
+  CLI, HTTP, return values, logs, …) is the project's; throughline governs only that a
+  plan exists, is executed, and yields evidence (FR-26).
+- **Precise time-to-completion ETAs** for LLM-driven builds — progress is an honest
+  estimate, not a forecast (FR-30).
+- **Run control from the progress view** — it is read-only observability, not a console
+  to pause / resume / cancel a build.
 
 ## Constraints & assumptions
 
@@ -163,7 +243,15 @@ independently verifiable.
   override with `THROUGHLINE_INTEGRATION_BRANCH`.
 - Default models: build `opus`, review `sonnet` (override via `--model` /
   `--review-model` or `THROUGHLINE_BUILD_MODEL` / `THROUGHLINE_REVIEW_MODEL`).
+- The progress live/follow mode (FR-29) is realized inside the TUI as a read-only,
+  interruptible watch over the run-state record (e.g. a foreground `!` command ended
+  with Ctrl-C). It neither ends the session nor touches the detached build, which runs
+  in its own processes / worktrees; Claude Code has no native always-on dashboard pane,
+  so "live" means follow-until-interrupt. At most one run is active at a time (the
+  single-run lock, FR-18), so there is a single run to report on.
 
 ## Open questions
 
-- None outstanding for the current (retroactively documented) functionality.
+- **Acceptance-criterion backfill.** FR-24 applies going forward and to this update's
+  new requirements; whether and when to retrofit observable acceptance criteria onto
+  the pre-existing FR-1–FR-22 is open (out of scope for this update).

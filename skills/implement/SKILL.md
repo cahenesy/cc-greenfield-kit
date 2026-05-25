@@ -13,7 +13,7 @@ command, no manual batch/single distinction.
 - `/implement <tdd-path>` → build just that TDD.
 - `/implement` (no argument) → build every TDD that has been merged to the
   integration branch (origin's default / `main` / `master`; override with
-  `GREENFIELD_INTEGRATION_BRANCH`) and is not yet `implemented`, in numeric order.
+  `THROUGHLINE_INTEGRATION_BRANCH`) and is not yet `implemented`, in numeric order.
   **The design-PR merge is what makes a TDD buildable** — merging lands it on the
   integration branch at `draft`, and that is the go-signal. There is no manual
   `Status: ready` step (a hand-set `ready` is still honored for back-compat). An
@@ -119,13 +119,13 @@ for the set instead.
   branch to PR manually.
 - Integration branch (what "merged = buildable" reads from) is auto-detected as
   origin's default → `main` → `master` → current branch. Set
-  `GREENFIELD_INTEGRATION_BRANCH` for a non-standard default. Normally you run
+  `THROUGHLINE_INTEGRATION_BRANCH` for a non-standard default. Normally you run
   `/implement` from that branch, so it matches what you have checked out.
 - The runner sets `--permission-mode auto` for unattended runs; for tighter
   control add a tool allowlist or use OS sandboxing.
 - Models: the build runs on the best model (opus by default); the review gate runs
   on a DIFFERENT model (sonnet by default) for diversity. Override with `--model` /
-  `--review-model`, or `GREENFIELD_BUILD_MODEL` / `GREENFIELD_REVIEW_MODEL`.
-- `GREENFIELD_REQUIRE_TEST_FIRST=0` disables the failing-test-first gate (e.g. a
+  `--review-model`, or `THROUGHLINE_BUILD_MODEL` / `THROUGHLINE_REVIEW_MODEL`.
+- `THROUGHLINE_REQUIRE_TEST_FIRST=0` disables the failing-test-first gate (e.g. a
   batch of pure refactors); leave it on (default) for feature work.
 - "skip git" → build and commit on the current branch with no branching/PRs.

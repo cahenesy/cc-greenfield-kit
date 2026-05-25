@@ -15,7 +15,7 @@
 #
 # What gets built: a TDD becomes buildable when its design PR MERGES — i.e. when
 # it lands on the integration branch (origin's default / main / master; override
-# with GREENFIELD_INTEGRATION_BRANCH) at status draft|ready and not yet
+# with THROUGHLINE_INTEGRATION_BRANCH) at status draft|ready and not yet
 # implemented. There is no manual `Status: ready` step; an un-merged draft on a
 # design branch is not on integration, so the PR stays the gate.
 #
@@ -67,8 +67,8 @@ esac; done
 # present there and not yet `implemented` — so the design-PR merge is the trigger,
 # with no manual `ready` flip and no CI dependency. Un-merged drafts on a design
 # branch are absent here, so the PR stays the gate. Detect it (origin's default →
-# main → master → current branch); override with GREENFIELD_INTEGRATION_BRANCH.
-INTEGRATION="${GREENFIELD_INTEGRATION_BRANCH:-}"
+# main → master → current branch); override with THROUGHLINE_INTEGRATION_BRANCH.
+INTEGRATION="${THROUGHLINE_INTEGRATION_BRANCH:-}"
 if [ -z "$INTEGRATION" ]; then
   git symbolic-ref -q refs/remotes/origin/HEAD >/dev/null 2>&1 \
     && INTEGRATION="$(git symbolic-ref --short refs/remotes/origin/HEAD)"
@@ -82,10 +82,10 @@ fi
 # genuine diversity — a same-model reviewer shares the author's blind spots. The
 # reviewer subagents are `model: inherit`, so this choice reaches the analysis,
 # not just the orchestrator. Override via --model / --review-model or
-# GREENFIELD_BUILD_MODEL / GREENFIELD_REVIEW_MODEL.
-[ -z "$MODEL" ] && MODEL="${GREENFIELD_BUILD_MODEL:-opus}"
+# THROUGHLINE_BUILD_MODEL / THROUGHLINE_REVIEW_MODEL.
+[ -z "$MODEL" ] && MODEL="${THROUGHLINE_BUILD_MODEL:-opus}"
 if [ -z "$REVIEW_MODEL" ]; then
-  REVIEW_MODEL="${GREENFIELD_REVIEW_MODEL:-}"
+  REVIEW_MODEL="${THROUGHLINE_REVIEW_MODEL:-}"
   [ -z "$REVIEW_MODEL" ] && case "$MODEL" in
     *opus*) REVIEW_MODEL="sonnet" ;;
     *)      REVIEW_MODEL="opus"   ;;
@@ -143,7 +143,7 @@ run_verify()    { bash "$VERIFY" >>"$1" 2>&1; }
 # unless it emits `TEST_FIRST: SKIPPED` for a genuine no-new-behavior change. The
 # independent review gate judges test QUALITY; this just proves the order existed.
 test_first_ok() {  # <base-ref> <log>
-  [ "${GREENFIELD_REQUIRE_TEST_FIRST:-1}" = "1" ] || return 0
+  [ "${THROUGHLINE_REQUIRE_TEST_FIRST:-1}" = "1" ] || return 0
   local base="$1" log="$2"
   grep -aqE 'TEST_FIRST:[[:space:]]*SKIPPED' "$log" && return 0
   git log --format='%s' "$base..HEAD" 2>/dev/null | grep -qiE '^test\(failing\)' && return 0
@@ -167,9 +167,9 @@ record_blocker() {  # <tdd> <reason>  -> append to the main repo's blocker ledge
 # and verify.sh fails until deps are installed. Install them once per worktree,
 # before building, using the project's package manager. No-ops for non-JS repos
 # (and other ecosystems that fetch on build, e.g. cargo/go); skip with
-# GREENFIELD_SKIP_DEPS=1. cwd must be the worktree.
+# THROUGHLINE_SKIP_DEPS=1. cwd must be the worktree.
 install_deps() {  # <log>
-  [ "${GREENFIELD_SKIP_DEPS:-0}" = "1" ] && return 0
+  [ "${THROUGHLINE_SKIP_DEPS:-0}" = "1" ] && return 0
   [ -f package.json ] || return 0
   local log="$1" pm cmd
   if   [ -f pnpm-lock.yaml ];   then pm=pnpm; cmd="pnpm install --frozen-lockfile"

@@ -10,14 +10,14 @@ Run once after a PRD update. YOU decide how many TDDs to write, and their scope,
 based on what changed. Persist each to `docs/tdd/NNNN-<slug>.md`.
 
 ## Relationship to superpowers (read first)
-This skill IS the technical-design step for greenfield — the governance-producing
+This skill IS the technical-design step for throughline — the governance-producing
 equivalent of `superpowers:writing-plans`. When the user invokes `/tdd-author`, do
 NOT also invoke `superpowers:brainstorming` or `writing-plans`; this skill owns the
 phase and its output is the TDD/ADR design-of-record (see [[ADR 0001]] in
 `docs/adr/`). If a `docs/superpowers/plans/*` (or `specs/*`) file or other prior
 design notes exist, READ and fold in their substance rather than redoing the work;
 they are transient input, never authoritative, never relocated. The canonical
-record is `docs/tdd/` + `docs/adr/`. A greenfield TDD is a DESIGN, not a
+record is `docs/tdd/` + `docs/adr/`. A throughline TDD is a DESIGN, not a
 step-by-step build script — the bite-sized failing-test-first task breakdown is
 `/implement`'s job (`build-prompt.md`), so do not reproduce it here.
 

@@ -60,6 +60,10 @@ Read `docs/adr/INDEX.md`. Treat only `accepted` ADRs as binding; pull full ADR
 bodies on demand by relevant Scope. Exclude superseded; note proposed.
 
 ## 5. Author the approved set
+> Tip: the interview parts of this phase benefit from `/fast` (faster output, still
+> Opus) for snappier back-and-forth; toggle it off if you want slower, more
+> deliberate output while authoring the designs themselves.
+
 Interview the user (AskUserQuestion) on the cross-cutting and per-unit design
 decisions. These features are related — reason about them together so the
 designs stay consistent. CHALLENGE the PRD: surface infeasible, contradictory,

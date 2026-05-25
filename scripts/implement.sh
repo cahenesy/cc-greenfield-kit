@@ -105,6 +105,21 @@ MAINREPO="$PWD"
 LOGDIR="$MAINREPO/docs/tdd/.implement-logs/$(date +%Y%m%d-%H%M%S)"; mkdir -p "$LOGDIR"
 REPORT="$LOGDIR/report.md"; { echo "# Implement report — $(date)"; echo; } > "$REPORT"
 
+# Single-run lock: a second /implement on the same repo would double-build, so refuse
+# to start while another run is live. This is what lets you keep authoring PRDs/TDDs
+# in your session while a build runs detached — you can't accidentally launch a rival
+# run. The lock is the runner's PID; a dead PID (e.g. after kill -9) is treated as
+# stale and reclaimed. Released on exit (any cause) via the trap.
+LOCK="$MAINREPO/docs/tdd/.implement-logs/.run.lock"
+if [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
+  { echo "An /implement run is already in progress (PID $(cat "$LOCK")). Refusing to"
+    echo "start a second — it would double-build. Wait for it, or if it's stale remove"
+    echo "$LOCK and re-run."; } | tee -a "$REPORT" >&2
+  exit 1
+fi
+echo "$$" > "$LOCK"
+trap 'rm -f "$LOCK"' EXIT
+
 if [ -n "$ONE" ]; then TDDS=("$ONE")
 else
   # Buildable = a TDD on the integration branch whose status THERE is draft|ready

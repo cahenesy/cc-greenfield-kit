@@ -26,6 +26,10 @@ relocated. The canonical record is `docs/PRD.md`.
 
 ## Process
 
+> Tip: this phase is an interactive interview — consider toggling `/fast` for
+> snappier back-and-forth. Fast mode keeps Opus, just with faster output, so it
+> suits requirements/design conversation without trading quality.
+
 1. Explore the problem space. Establish what exists, who the users are, and
    what success looks like. Ingest any prior design notes (see above).
 2. **Scope check first.** If the ask is really several independent products or

@@ -97,7 +97,14 @@ One-time, per repo:
 
 Then each feature/change is one lap of the loop below. Rule of thumb: **one fresh
 session per command** — `/clear` (or a new session) at every phase boundary, after
-each GitHub merge and before the next command.
+each GitHub merge and before the next command. The interactive phases
+(`/prd-author`, `/tdd-author`, `/bootstrap-project`) pair well with **`/fast`**
+(faster Opus output for snappy interviews); leave it off for `/implement`, which
+runs detached and unattended.
+
+Because `/implement` runs detached in an isolated worktree, you can keep working —
+including `/prd-author` and `/tdd-author` for the *next* change — while a build runs
+(it holds a single-run lock, so a second `/implement` won't double-build).
 
 **1. Requirements** — *fresh session*
 - `/prd-author` → interviews you, writes `docs/PRD.md`, opens a **PRD PR** (never merges).

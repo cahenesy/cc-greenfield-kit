@@ -7,18 +7,24 @@
 # working tree your interactive session is using. Build branches/commits persist
 # in the shared repo after the worktree is removed.
 #
-#   ./scripts/implement.sh                    # all `ready` TDDs, stacked PRs
+#   ./scripts/implement.sh                    # every TDD merged to integration, stacked PRs
 #   ./scripts/implement.sh docs/tdd/0003-x.md # just one TDD
 #   ./scripts/implement.sh --parallel         # independent features, worktrees
 #   ./scripts/implement.sh --combined         # one shared branch + ONE PR
 #   ./scripts/implement.sh --rebuild          # rebuild even already-built TDDs
 #
+# What gets built: a TDD becomes buildable when its design PR MERGES — i.e. when
+# it lands on the integration branch (origin's default / main / master; override
+# with GREENFIELD_INTEGRATION_BRANCH) at status draft|ready and not yet
+# implemented. There is no manual `Status: ready` step; an un-merged draft on a
+# design branch is not on integration, so the PR stays the gate.
+#
 # Re-run safety (the done-signal lives on the build branch, not your base, until
 # you merge): a TDD already `implemented` on an existing un-merged branch is
 # treated as done-but-awaiting-your-merge and SKIPPED, not rebuilt — so a re-run
 # before you merge does not duplicate work or open duplicate PRs. A merged TDD is
-# `implemented` on BASE and never queued; an abandoned/deleted branch rebuilds.
-# --rebuild forces a fresh build regardless.
+# `implemented` on the integration branch and never queued; an abandoned/deleted
+# branch rebuilds. --rebuild forces a fresh build regardless.
 #
 # Each TDD is built in a FRESH `claude -p` process (clean context per feature),
 # pinned by default to the best model (opus). A build's own `BATCH_RESULT: OK` is
@@ -57,6 +63,21 @@ while [ $# -gt 0 ]; do case "$1" in
 esac; done
 [ -z "$CHANGE" ] && CHANGE="build/$(date +%Y%m%d-%H%M%S)"
 
+# Integration branch: where a merged design PR lands a TDD. "Approved to build" =
+# present there and not yet `implemented` — so the design-PR merge is the trigger,
+# with no manual `ready` flip and no CI dependency. Un-merged drafts on a design
+# branch are absent here, so the PR stays the gate. Detect it (origin's default →
+# main → master → current branch); override with GREENFIELD_INTEGRATION_BRANCH.
+INTEGRATION="${GREENFIELD_INTEGRATION_BRANCH:-}"
+if [ -z "$INTEGRATION" ]; then
+  git symbolic-ref -q refs/remotes/origin/HEAD >/dev/null 2>&1 \
+    && INTEGRATION="$(git symbolic-ref --short refs/remotes/origin/HEAD)"
+  for cand in "$INTEGRATION" main master "$BASE"; do
+    [ -n "$cand" ] && git rev-parse -q --verify "$cand^{commit}" >/dev/null 2>&1 \
+      && { INTEGRATION="$cand"; break; }
+  done
+fi
+
 # Models: build on the best available (opus); review on a DIFFERENT model for
 # genuine diversity — a same-model reviewer shares the author's blind spots. The
 # reviewer subagents are `model: inherit`, so this choice reaches the analysis,
@@ -85,8 +106,21 @@ LOGDIR="$MAINREPO/docs/tdd/.implement-logs/$(date +%Y%m%d-%H%M%S)"; mkdir -p "$L
 REPORT="$LOGDIR/report.md"; { echo "# Implement report — $(date)"; echo; } > "$REPORT"
 
 if [ -n "$ONE" ]; then TDDS=("$ONE")
-else mapfile -t TDDS < <(grep -lE '^Status:[[:space:]]*ready' docs/tdd/*.md 2>/dev/null | sort); fi
-[ "${#TDDS[@]}" -eq 0 ] && { echo "No ready TDDs to build." | tee -a "$REPORT"; exit 0; }
+else
+  # Buildable = a TDD on the integration branch whose status THERE is draft|ready
+  # (not yet implemented). The merge brought it onto integration; that is the
+  # go-signal — no manual `ready` flip. Reading status from the ref (not the
+  # working tree) keeps the queue deterministic and is what makes the merge-guard
+  # airtight: an un-merged draft simply is not in this ref. `ready` is still
+  # accepted, so TDDs hand-flipped under the old flow keep building.
+  TDDS=()
+  while IFS= read -r f; do
+    st="$(git show "$INTEGRATION:$f" 2>/dev/null | sed -n 's/^Status:[[:space:]]*//p' | head -1)"
+    case "$st" in draft|ready) TDDS+=("$f") ;; esac
+  done < <(git ls-tree -r --name-only "$INTEGRATION" -- docs/tdd 2>/dev/null \
+            | grep -E 'docs/tdd/[0-9][^/]*\.md$' | sort)
+fi
+[ "${#TDDS[@]}" -eq 0 ] && { echo "No buildable TDDs (none merged to $INTEGRATION awaiting build)." | tee -a "$REPORT"; exit 0; }
 echo "Queue (${#TDDS[@]}):"; printf '  %s\n' "${TDDS[@]}"; echo "Report: $REPORT"; echo
 
 # --- per-TDD primitives (cwd = the repo or worktree they run in) ---------------
@@ -117,7 +151,7 @@ test_first_ok() {  # <base-ref> <log>
 }
 flip_status() {  # <tdd> <log>
   local tdd="$1" log="$2"
-  sed -i.bak -E 's/^Status:[[:space:]]*ready/Status: implemented/' "$tdd" && rm -f "$tdd.bak"
+  sed -i.bak -E 's/^Status:[[:space:]]*(draft|ready)/Status: implemented/' "$tdd" && rm -f "$tdd.bak"
   git add "$tdd" >>"$log" 2>&1
   git commit -m "mark $(basename "$tdd" .md) implemented (verified + reviewed)" >>"$log" 2>&1
 }

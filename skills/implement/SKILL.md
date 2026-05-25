@@ -1,23 +1,28 @@
 ---
 name: implement
-description: Build TDDs unattended. With no argument, implements every `ready` TDD not yet `implemented`, as a batch (a batch of one is fine). Pass a TDD path to build just that one. Confirms the queue, then launches the build itself as a detached background job so your session stays clean. Invoke with /implement.
+description: Build TDDs unattended. With no argument, implements every TDD that has been merged to the integration branch and is not yet `implemented`, as a batch (a batch of one is fine). Pass a TDD path to build just that one. Confirms the queue, then launches the build itself as a detached background job so your session stays clean. Invoke with /implement.
 disable-model-invocation: true
 ---
 
 # Implement
 
-The single entry point for turning TDDs into code. One ready TDD or seven — same
+The single entry point for turning TDDs into code. One merged TDD or seven — same
 command, no manual batch/single distinction.
 
 ## Scope
 - `/implement <tdd-path>` → build just that TDD.
-- `/implement` (no argument) → build every `docs/tdd/*.md` with `Status: ready`,
-  in numeric order. TDDs at `Status: implemented` are skipped — that flip is the
-  done-signal, so a re-run resumes whatever is still `ready`.
+- `/implement` (no argument) → build every TDD that has been merged to the
+  integration branch (origin's default / `main` / `master`; override with
+  `GREENFIELD_INTEGRATION_BRANCH`) and is not yet `implemented`, in numeric order.
+  **The design-PR merge is what makes a TDD buildable** — merging lands it on the
+  integration branch at `draft`, and that is the go-signal. There is no manual
+  `Status: ready` step (a hand-set `ready` is still honored for back-compat). An
+  un-merged draft on a design branch is not on integration, so the PR stays the
+  gate. TDDs at `Status: implemented` are skipped — that flip is the done-signal.
 - Re-run safety: the flip to `implemented` is committed on the build branch, not
-  on your base, until you merge. So a re-run before merging would otherwise see
-  the TDD as still `ready` on base and rebuild it. The runner prevents that — a
-  TDD already `implemented` on an existing un-merged branch is treated as
+  on the integration branch, until you merge. So a re-run before merging would
+  otherwise see the TDD as still buildable and rebuild it. The runner prevents
+  that — a TDD already `implemented` on an existing un-merged branch is treated as
   done-but-awaiting-merge and SKIPPED (it points you at the branch), so re-running
   never duplicates work or PRs. `--rebuild` forces a fresh build anyway.
 
@@ -112,6 +117,10 @@ for the set instead.
 ## Notes
 - PRs need a git remote and the `gh` CLI; without them, commits stay on the
   branch to PR manually.
+- Integration branch (what "merged = buildable" reads from) is auto-detected as
+  origin's default → `main` → `master` → current branch. Set
+  `GREENFIELD_INTEGRATION_BRANCH` for a non-standard default. Normally you run
+  `/implement` from that branch, so it matches what you have checked out.
 - The runner sets `--permission-mode auto` for unattended runs; for tighter
   control add a tool allowlist or use OS sandboxing.
 - Models: the build runs on the best model (opus by default); the review gate runs

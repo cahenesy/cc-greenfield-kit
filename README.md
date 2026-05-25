@@ -22,7 +22,7 @@ cc-greenfield-kit/
 │   ├── prd-author/           # /prd-author  — the WHAT  → docs/PRD.md
 │   ├── tdd-author/           # /tdd-author  — the HOW   → docs/tdd/NNNN-*
 │   ├── adr-new/              # /adr-new     — durable decisions → docs/adr/
-│   ├── implement/            # /implement   — build all ready TDDs, detached
+│   ├── implement/            # /implement   — build all merged TDDs, detached
 │   └── review/               # /review      — unbiased subagent review
 ├── scripts/
 │   ├── implement.sh          # detached runner (fresh claude -p per TDD)
@@ -45,7 +45,7 @@ cc-greenfield-kit/
 |                    |                          | challenges PRD; recommends ADR actions; runs an    |
 |                    |                          | independent design-critique gate before the PR.    |
 | `/adr-new`         | `docs/adr/NNNN-*`        | append-only, status-gated supersession.            |
-| `/implement`       | code + tests + PR(s)     | builds ALL `ready` TDDs (1 or many), always        |
+| `/implement`       | code + tests + PR(s)     | builds every merged, unbuilt TDD (1 or many), always        |
 |                    |                          | detached; gates each on test-first + verify +      |
 |                    |                          | review (review on a diverse model) before flipping |
 |                    |                          | to `implemented`; one PR per TDD; halts the stack  |
@@ -61,8 +61,12 @@ design. Before opening the design PR, `/tdd-author` runs an independent
 model than the author) that blocks on untraced requirements, under-specified
 interfaces, ADR conflicts, or a new dependency lacking the REQUIRED alternatives
 analysis; its verdict rides in the design PR so the human merges on an informed
-view. `/implement` does NOT trust a build's self-reported success: the
-`ready -> implemented` flip is gated on THREE independent checks — failing-test-
+view. A TDD becomes buildable when its design PR MERGES — merging lands it on the
+integration branch, and `/implement` builds whatever is there at `draft`/`ready`
+and not yet `implemented` (no manual `Status: ready` step; an un-merged draft on a
+design branch is not on integration, so the PR stays the gate). `/implement` does
+NOT trust a build's self-reported success: the flip to `implemented` is gated on
+THREE independent checks — failing-test-
 first discipline (a `test(failing):` commit must precede the implementation),
 `verify.sh` (mechanically re-runs the tests + typecheck + project linter), AND an
 independent review that must return `REVIEW_RESULT: PASS`. The build runs on the

@@ -52,7 +52,7 @@ failure for correction rather than reverting it.
   no unit tests. Ask whether to add a framework and backfill tests for
   existing code before proceeding. Do not silently introduce a framework.
 
-`/implement` gates every `ready -> implemented` flip on the plugin's verify
+`/implement` gates every TDD's flip to `implemented` on the plugin's verify
 gate, which runs the test suite + typecheck + project linter (eslint, ruff,
 clippy `-D warnings`, golangci-lint). That gate needs a working test/typecheck
 command (auto-detected, or set via `VERIFY_TEST_CMD` / `VERIFY_TYPECHECK_CMD` /

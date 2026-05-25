@@ -14,7 +14,7 @@ Run this in its own session. If `docs/PRD.md` already exists you are UPDATING
 it — read it first and preserve requirements still valid; note what changed.
 
 ## Relationship to superpowers (read first)
-This skill IS the design/requirements step for greenfield — it is the
+This skill IS the design/requirements step for throughline — it is the
 governance-producing equivalent of `superpowers:brainstorming`. When the user
 invokes `/prd-author`, do NOT also invoke `superpowers:brainstorming` or
 `writing-plans`; this skill owns the phase and its output is the PRD of record (see

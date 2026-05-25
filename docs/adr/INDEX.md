@@ -4,4 +4,4 @@
 
 | #    | Title                                                  | Status   | Scope                          |
 |------|--------------------------------------------------------|----------|--------------------------------|
-| 0001 | Greenfield layers on top of superpowers; it governs, superpowers builds | accepted | workflow / plugin-architecture |
+| 0001 | Throughline layers on top of superpowers; it governs, superpowers builds | accepted | workflow / plugin-architecture |

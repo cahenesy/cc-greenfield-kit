@@ -1,6 +1,6 @@
-# cc-greenfield-kit
+# cc-throughline-kit
 
-A deliberately minimal Claude Code plugin for building complex greenfield
+A deliberately minimal Claude Code plugin for building complex throughline
 systems. It packages the project-*invariant* layer (install once, cached under
 `~/.claude/plugins/cache/` so it follows you everywhere) and a persistent
 **PRD → TDD → ADR** design-doc pipeline with a build/review loop. Project-
@@ -9,7 +9,7 @@ systems. It packages the project-*invariant* layer (install once, cached under
 ## What's inside
 
 ```
-cc-greenfield-kit/
+cc-throughline-kit/
 ├── .claude-plugin/{plugin.json, marketplace.json}
 ├── agents/
 │   ├── explore.md            # read-only investigation (Sonnet)
@@ -38,7 +38,7 @@ cc-greenfield-kit/
 
 | Skill              | Produces / does          | Notes                                              |
 |--------------------|--------------------------|----------------------------------------------------|
-| `/bootstrap-project` | toolchain + `docs/` tree | greenfield: linter, formatter, test, git, scaffold |
+| `/bootstrap-project` | toolchain + `docs/` tree | throughline: linter, formatter, test, git, scaffold |
 | `/prd-author`      | `docs/PRD.md`            | the WHAT. Explore + interview. Own session.        |
 | `/tdd-author`      | `docs/tdd/NNNN-*`        | the HOW. Runs ONCE/PRD update: diffs PRD vs prev + |
 |                    |                          | existing TDDs to decide how many TDDs to write;    |
@@ -78,7 +78,7 @@ one stacked PR per TDD; a failed gate halts the run and marks downstream TDDs
 git worktree, so the detached runner never touches the working tree your session
 is using; each fresh worktree gets the project's dependencies installed first
 (e.g. `pnpm install` / `npm ci` / `cargo` & `go` fetch on build), since a worktree
-does not carry gitignored `node_modules` (`GREENFIELD_SKIP_DEPS=1` opts out). The
+does not carry gitignored `node_modules` (`THROUGHLINE_SKIP_DEPS=1` opts out). The
 verify gate is package-manager-aware (pnpm/yarn/bun/npm) and prefers the project's
 own `test` / `typecheck` / `lint` scripts when declared. Because the `implemented`
 flip lives on the build branch until you
@@ -100,22 +100,22 @@ a subagent, so run each in its own fresh session and `/clear` between them.
 
 ## Relationship to superpowers & the official plugins
 
-Greenfield is a thin **governance overlay** — it does not try to own your whole
+Throughline is a thin **governance overlay** — it does not try to own your whole
 SDLC. It layers on top of the official `claude-plugins-official` plugins
 (superpowers, pr-review-toolkit, code-review) rather than competing with them
-([ADR 0001](docs/adr/0001-greenfield-layers-on-superpowers.md)):
+([ADR 0001](docs/adr/0001-throughline-layers-on-superpowers.md)):
 
 - **Superpowers owns discovery and engineering** — `brainstorming`, TDD, worktrees,
-  code review, verification, branch finishing. **Greenfield owns governance** —
+  code review, verification, branch finishing. **Throughline owns governance** —
   PRD/TDD/ADR as the design-of-record, requirement traceability, and phase-gate PRs.
 - **The explicit command is the ownership signal.** Invoking `/prd-author` or
-  `/tdd-author` means greenfield owns that phase and will NOT also fire
+  `/tdd-author` means throughline owns that phase and will NOT also fire
   `superpowers:brainstorming`/`writing-plans`. If superpowers artifacts already
-  exist (`docs/superpowers/{specs,plans}`), greenfield **ingests** them instead of
-  re-interviewing. With no greenfield command invoked, superpowers' defaults stand.
+  exist (`docs/superpowers/{specs,plans}`), throughline **ingests** them instead of
+  re-interviewing. With no throughline command invoked, superpowers' defaults stand.
 - **Canonical docs:** `docs/PRD.md` + `docs/tdd/` + `docs/adr/` are the
   design-of-record. `docs/superpowers/*` is transient input — ingested, never
-  authoritative, never relocated. Dropping greenfield into a repo that already uses
+  authoritative, never relocated. Dropping throughline into a repo that already uses
   superpowers is therefore non-destructive.
 
 For the boundary to bind reliably, add a line to your CLAUDE.md, e.g.: *"When
@@ -128,8 +128,8 @@ invoke `superpowers:brainstorming` or `writing-plans` for it."*
 chmod +x hooks/format-and-lint.sh scripts/implement.sh scripts/verify.sh
 bash tests/implement-gate.test.sh          # optional: prove the gates fire
 # push this dir to a private GitHub repo, then:
-/plugin marketplace add <your-org>/cc-greenfield-kit
-/plugin install greenfield@cc-greenfield-kit
+/plugin marketplace add <your-org>/cc-throughline-kit
+/plugin install throughline@cc-throughline-kit
 ```
 
 ## Caveat

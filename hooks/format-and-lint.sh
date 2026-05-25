@@ -12,7 +12,7 @@
 # running is worse than one that complains.
 #
 # The whole-project linters (clippy, golangci-lint) are expensive, so they are
-# DEBOUNCED: at most one run per GREENFIELD_LINT_DEBOUNCE seconds (default 30)
+# DEBOUNCED: at most one run per THROUGHLINE_LINT_DEBOUNCE seconds (default 30)
 # per repo. Per-file linters (eslint, ruff) are cheap and always run. The build
 # runner's verify.sh + review gates are the real backstop, so a debounced skip
 # never lets a defect through unchecked.
@@ -40,10 +40,10 @@ fail() { echo "format-and-lint: $1" >&2; exit 2; }
 
 # debounce <key>: returns 0 (run) at most once per window per repo, else 1 (skip).
 debounce() {
-  local key="$1" window="${GREENFIELD_LINT_DEBOUNCE:-30}" now last
+  local key="$1" window="${THROUGHLINE_LINT_DEBOUNCE:-30}" now last
   local id marker
   id="$(printf '%s' "$PWD" | cksum | cut -d' ' -f1)"
-  marker="${TMPDIR:-/tmp}/greenfield-lint-${id}-${key}.ts"
+  marker="${TMPDIR:-/tmp}/throughline-lint-${id}-${key}.ts"
   now="$(date +%s)"
   last="$(cat "$marker" 2>/dev/null || echo 0)"
   [ $((now - last)) -lt "$window" ] && return 1

@@ -1,7 +1,7 @@
 # throughline
 
-A deliberately minimal Claude Code plugin for building complex throughline
-systems. It packages the project-*invariant* layer (install once, cached under
+A deliberately minimal Claude Code plugin for designing and building complex
+software systems from the ground up. It packages the project-*invariant* layer (install once, cached under
 `~/.claude/plugins/cache/` so it follows you everywhere) and a persistent
 **PRD → TDD → ADR** design-doc pipeline with a build/review loop. Project-
 *specific* artifacts are generated per project by the skills below.
@@ -38,7 +38,7 @@ throughline/
 
 | Skill              | Produces / does          | Notes                                              |
 |--------------------|--------------------------|----------------------------------------------------|
-| `/bootstrap-project` | toolchain + `docs/` tree | throughline: linter, formatter, test, git, scaffold |
+| `/bootstrap-project` | toolchain + `docs/` tree | greenfield: linter, formatter, test, git, scaffold |
 | `/prd-author`      | `docs/PRD.md`            | the WHAT. Explore + interview. Own session.        |
 | `/tdd-author`      | `docs/tdd/NNNN-*`        | the HOW. Runs ONCE/PRD update: diffs PRD vs prev + |
 |                    |                          | existing TDDs to decide how many TDDs to write;    |
@@ -87,6 +87,64 @@ work or PRs; `--rebuild` overrides). Stacked PRs come with an ordered, bottom-up
 **merge plan** in the report (merge in order; squash-merge breaks the stack — use
 a merge commit/rebase-merge, or `--combined` for one squashable PR).
 
+## Workflow (step by step)
+
+One-time, per repo:
+
+```
+/bootstrap-project        # toolchain + docs/ scaffold + git on main
+```
+
+Then each feature/change is one lap of the loop below. Rule of thumb: **one fresh
+session per command** — `/clear` (or a new session) at every phase boundary, after
+each GitHub merge and before the next command.
+
+**1. Requirements** — *fresh session*
+- `/prd-author` → interviews you, writes `docs/PRD.md`, opens a **PRD PR** (never merges).
+- **GitHub:** review + **merge the PRD PR** — approves requirements; its commit is the
+  baseline `/tdd-author` diffs against.
+- `/clear`.
+
+**2. Design** — *fresh session*
+- `/tdd-author` → diffs the PRD, proposes the TDD set (you approve), writes TDDs as
+  `draft`, self-reviews, creates ADRs (it invokes `/adr-new` itself), runs the
+  independent design-critique gate, opens the **design PR** (TDDs + ADRs, verdict in
+  the body; never merges).
+- **GitHub:** review + **merge the design PR**. *This merge is the build trigger* — it
+  lands the `draft` TDDs on `main`, which is what makes them buildable. There is no
+  manual `Status: ready` step.
+- `/clear`.
+
+**3. Build** — *fresh session, on `main`, pulled current*
+- `/implement` → confirms the queue (every TDD merged to `main`, not yet
+  `implemented`) and the mode, then launches a **detached** runner and hands control
+  back. Each TDD builds failing-test-first and must pass three gates (test-first +
+  `verify.sh` + independent cross-model review) before it flips to `implemented` and
+  opens a **feature PR**. Never merges. Watch
+  `docs/tdd/.implement-logs/<ts>/report.md`.
+- **GitHub:** review + **merge the feature PR(s)**. Sequential (default) PRs are
+  *stacked* — merge **bottom-up in the report's "Merge plan" order**, with a
+  merge-commit or rebase-merge (a squash breaks the stack; use `/implement --combined`
+  for one squashable PR).
+- `/clear` before the next lap.
+
+Next lap: `/prd-author` *updates* the existing PRD, and the cycle repeats.
+
+### When to `/clear`
+One fresh session per command — three clears per lap (before `/tdd-author`, before
+`/implement`, before the next `/prd-author`). This is safe because the state of
+record lives in **git + `docs/`**, not the chat: each phase re-reads the merged
+`main`, so a clear only drops the previous interview's noise. Do **not** `/clear`
+*during* `/implement` — it runs detached in its own processes, so the session stays
+clean on its own (you can even close the terminal).
+
+### Feedback edges (not the happy path)
+- **Design blocker at build time:** `/implement` appends infeasible/contradictory
+  requirements to `docs/tdd/BLOCKERS.md` and halts → re-run `/tdd-author` (it reads
+  BLOCKERS.md), merge the design PR, re-run `/implement`.
+- **Partial build:** a failed gate halts the stack and marks downstream TDDs
+  `BLOCKED` in the report → fix, then re-run `/implement` (it resumes the unbuilt ones).
+
 ## Context hygiene
 
 Skills run inside the session context, so a skill cannot `/clear` itself.
@@ -121,6 +179,32 @@ SDLC. It layers on top of the official `claude-plugins-official` plugins
 For the boundary to bind reliably, add a line to your CLAUDE.md, e.g.: *"When
 `/prd-author` or `/tdd-author` is invoked, that is the design step — do not also
 invoke `superpowers:brainstorming` or `writing-plans` for it."*
+
+## Requirements & companion plugins
+
+Throughline runs **standalone** — it ships its own subagents and review gate, so it
+needs no other plugin to function. It is designed to *layer with* the official
+plugins, not require them ([ADR 0001](docs/adr/0001-throughline-layers-on-superpowers.md)):
+
+- **superpowers** — discovery (`brainstorming`) and the generic engineering skills;
+  throughline ingests its `docs/superpowers/*` artifacts if present.
+- **pr-review-toolkit** / **code-review** — richer on-demand code review.
+
+These are **recommended, not required**. Install them yourself if you want them:
+
+```
+/plugin marketplace add anthropics/claude-plugins-official
+/plugin install superpowers@claude-plugins-official
+/plugin install pr-review-toolkit@claude-plugins-official
+```
+
+**On hard dependencies:** Claude Code supports a `dependencies` array in
+`plugin.json` that auto-installs prerequisite plugins (version constraints need
+Claude Code ≥ 2.1.110). Throughline deliberately declares **none** today, because it
+has no hard runtime dependency — forcing companions on every install would break the
+"non-destructive overlay" design. If a future change makes one mandatory (e.g.
+delegating `/review` to pr-review-toolkit, per ADR 0001's deferred work), that field
+is the mechanism to add it.
 
 ## Install (once per machine)
 

@@ -19,10 +19,12 @@ bad()  { printf 'fail\n' >>"$RESULTS"; printf '  FAIL — %s\n' "$1"; }
 has()  { grep -q "$2" "$1" 2>/dev/null && ok "$3" || bad "$3 (expected /$2/ in $1)"; }
 hasnt(){ grep -q "$2" "$1" 2>/dev/null && bad "$3 (unexpected /$2/ in $1)" || ok "$3"; }
 
-# Build a fresh project: <dir> <ntdds>. Installs a stub `claude` and a
-# controllable verify command on PATH/env; returns with PWD inside <dir>.
+# Build a fresh project: <dir> <ntdds> [status]. Installs a stub `claude` and a
+# controllable verify command on PATH/env; returns with PWD inside <dir>. TDDs are
+# committed on the init branch (= the integration branch) at <status> (default
+# ready; pass draft to exercise the merge-as-trigger default path).
 setup() {
-  local dir="$1" n="$2" i
+  local dir="$1" n="$2" status="${3:-ready}" i
   mkdir -p "$dir"/{docs/tdd,docs/adr,.stub/bin}
   cd "$dir"
   git init -q; git config user.email t@t.t; git config user.name t
@@ -30,8 +32,8 @@ setup() {
   printf '# ADR Index\n| # | Title | Status | Scope |\n|---|---|---|---|\n' > docs/adr/INDEX.md
   local names=(alpha beta gamma)
   for ((i=1;i<=n;i++)); do
-    printf '# TDD %04d: %s\nStatus: ready\nPRD refs: 1\nPRD-rev: deadbee\nADR constraints: none\n\n## Approach\nstub\n' \
-      "$i" "${names[$((i-1))]}" > "docs/tdd/$(printf '%04d' "$i")-${names[$((i-1))]}.md"
+    printf '# TDD %04d: %s\nStatus: %s\nPRD refs: 1\nPRD-rev: deadbee\nADR constraints: none\n\n## Approach\nstub\n' \
+      "$i" "${names[$((i-1))]}" "$status" > "docs/tdd/$(printf '%04d' "$i")-${names[$((i-1))]}.md"
   done
   git add -A; git commit -qm init
 
@@ -202,6 +204,25 @@ EOF
   has "$STUBDIR/pm.log" "install --frozen-lockfile" "worktree install ran via the project's package manager"
   # The TDD still flips: install + stubbed build + verify + review all pass.
   [ "$(status_on docs/tdd/0001-alpha.md ci/0001-alpha)" = implemented ] && ok "TDD implemented after worktree deps install" || bad "TDD should be implemented (got '$(status_on docs/tdd/0001-alpha.md ci/0001-alpha)')"
+) || true
+
+echo "[L] default draft path: a draft TDD merged to integration builds -> implemented (no manual ready)"
+( setup "$ROOT/l" 1 draft
+  bash "$IMPL" --change ci >/dev/null 2>&1
+  R="$(report)"
+  [ "$(status_on docs/tdd/0001-alpha.md ci/0001-alpha)" = implemented ] && ok "draft TDD built and flipped to implemented" || bad "draft TDD should build to implemented (got '$(status_on docs/tdd/0001-alpha.md ci/0001-alpha)')"
+  has "$R" "OK (verified + reviewed)" "report shows verified+reviewed OK for the draft TDD"
+) || true
+
+echo "[M] merge-guard: a TDD absent from the integration branch is NOT built (PR stays the gate)"
+( setup "$ROOT/m" 0                               # integration branch has PRD/ADR but NO TDDs
+  git checkout -q -b design/x                     # author a TDD only on a design branch
+  printf '# TDD 0001: alpha\nStatus: ready\nPRD refs: 1\nPRD-rev: deadbee\nADR constraints: none\n\n## Approach\nstub\n' > docs/tdd/0001-alpha.md
+  git add -A; git commit -qm "tdd on un-merged design branch" >/dev/null 2>&1
+  bash "$IMPL" --change ci >/dev/null 2>&1        # run while sitting on the un-merged branch
+  R="$(report)"
+  git rev-parse --verify ci/0001-alpha >/dev/null 2>&1 && bad "un-merged TDD must NOT be built (branch ci/0001-alpha exists)" || ok "un-merged TDD was not built (no build branch)"
+  has "$R" "No buildable TDDs" "report says nothing is buildable until merged"
 ) || true
 
 echo

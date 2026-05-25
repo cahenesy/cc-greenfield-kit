@@ -101,7 +101,8 @@ recommendations for approval — analyze, don't merely ask:
   accepted ADR.
 For each: proposed action, one-line rationale, confidence (mark low-confidence
 "optional"). Keep the bar HIGH; recommend zero if nothing qualifies. On
-approval, invoke `/adr-new` for each.
+approval, invoke the `adr-new` skill (via the Skill tool) for each — it is
+model-invocable precisely so this close-out can call it.
 
 ## 7. Design critique (independent gate — do not skip)
 Before opening the design PR, get an INDEPENDENT critique of the whole authored
@@ -123,8 +124,11 @@ conflicts, and scope coherence, ending with `DESIGN_REVIEW: PASS` or
 
 ## 8. Close-out
 Report which TDDs were written (as `draft`) and which existing TDDs you
-recommend revising. Tell the user to set `Status: ready` on the ones to build
-AFTER the design PR merges, then run `/implement` (it builds all `ready` TDDs).
+recommend revising. TDDs stay `draft` — there is NO manual `Status: ready` step.
+Merging the design PR lands them on the integration branch, and THAT is what
+makes them buildable: after the merge the user runs `/implement`, which builds
+every TDD the merge delivered (numeric order). To build only some of a merged
+set, pass paths: `/implement docs/tdd/NNNN-<slug>.md`.
 
 ## 9. Git (phase gate — the human design review)
 Unless the user says "skip git":
@@ -136,4 +140,5 @@ Unless the user says "skip git":
 - Open the design PR with `gh pr create` (base `main`) and put the design-critique
   verdict + findings summary (and any waivers) in the PR body, so the human
   reviews an INFORMED design, not a bare diff. Do NOT merge — the human merge of
-  this PR is the design gate: TDDs are set `ready` and built only after it lands.
+  this PR is the design gate: merging is what makes the TDDs buildable, so they are
+built only after it lands.

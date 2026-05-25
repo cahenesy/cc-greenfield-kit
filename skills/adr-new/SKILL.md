@@ -1,7 +1,6 @@
 ---
 name: adr-new
-description: Create a new Architecture Decision Record with append-only, status-gated supersession, and update the ADR index. Invoke with /adr-new, often from the /tdd-author close-out.
-disable-model-invocation: true
+description: Create a new Architecture Decision Record with append-only, status-gated supersession, and update the ADR index. Invoke with /adr-new, or let /tdd-author invoke it on approval of an ADR action (this skill stays model-invocable for that reason).
 ---
 
 # New ADR

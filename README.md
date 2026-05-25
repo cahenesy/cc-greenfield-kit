@@ -12,10 +12,9 @@ software systems from the ground up. It packages the project-*invariant* layer (
 throughline/
 ├── .claude-plugin/{plugin.json, marketplace.json}
 ├── agents/
-│   ├── test-writer.md        # focused test authoring (Sonnet)
-│   ├── security-reviewer.md  # security review (inherits the review gate's model)
-│   ├── code-reviewer.md      # correctness/consistency review (inherits)
+│   ├── security-reviewer.md  # in-gate security review (built-in /security-review needs an origin remote)
 │   └── design-reviewer.md    # independent design critique before the design PR
+│   # build → superpowers:TDD; code review → pr-review-toolkit (see ADR 0003)
 ├── skills/
 │   ├── bootstrap-project/    # /bootstrap-project — toolchain + docs scaffold
 │   ├── prd-author/           # /prd-author  — the WHAT  → docs/PRD.md
@@ -24,8 +23,8 @@ throughline/
 │   └── implement/            # /implement   — build all merged TDDs, detached
 ├── scripts/
 │   ├── implement.sh          # detached runner (fresh claude -p per TDD)
-│   ├── build-prompt.md       # per-feature build discipline (failing-test-first)
-│   ├── review-prompt.md      # independent review gate (separate process, diverse model)
+│   ├── build-prompt.md       # build discipline; delegates to superpowers:TDD
+│   ├── review-prompt.md      # review gate: pr-review-toolkit + security-reviewer, separate process/model
 │   └── verify.sh             # mechanical verify gate (tests + typecheck + lint)
 ├── tests/
 │   └── implement-gate.test.sh # eval: proves the gates actually fire

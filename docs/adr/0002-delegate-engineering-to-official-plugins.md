@@ -1,6 +1,6 @@
 # 0002. Depend on the official plugins and delegate overlapping engineering to them
 
-Status: accepted
+Status: superseded by 0003
 Date: 2026-05-25
 Scope: workflow / plugin-architecture
 Supersedes: 0001

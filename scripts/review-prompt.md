@@ -8,10 +8,14 @@ Scope: the changes in `git diff {{BASE}}..HEAD`. Read {{TDD}} in full, read
 docs/PRD.md for the requirements it references, and read the accepted ADRs the
 TDD lists under "ADR constraints".
 
-Fan out to subagents, each in its own isolated context:
-- `security-reviewer` — injection, authn/authz, secrets, unsafe handling.
-- `code-reviewer` — correctness, edge cases, error/timeout paths, and
-  consistency with the governing TDD and accepted ADRs.
+Fan out to these subagents, each in its own isolated context:
+- `pr-review-toolkit:code-reviewer` — correctness, edge cases, and consistency
+  with the governing TDD and accepted ADRs.
+- `pr-review-toolkit:silent-failure-hunter` — error/timeout paths, swallowed
+  errors, and inappropriate fallbacks.
+- `throughline:security-reviewer` — injection, authn/authz, secrets, unsafe
+  handling. Kept in-gate deliberately: the built-in `/security-review` depends on
+  an `origin` remote the build worktree may lack (see ADR 0003); use it on-demand.
 
 Also verify the FAILING-TEST-FIRST discipline directly: run
 `git log --oneline {{BASE}}..HEAD` and confirm a `test(failing): ...` commit

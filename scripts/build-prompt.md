@@ -7,10 +7,11 @@ bodies) plus docs/adr/INDEX.md for anything else relevant. Use the built-in
 
 Build discipline:
 - Implement in the sequence the TDD specifies, one step at a time.
-- FAILING TEST FIRST (mandatory). For each unit of behavior, BEFORE writing the
-  implementation: write the test via the `test-writer` subagent, run it, and
-  confirm it FAILS for the right reason (the behavior is genuinely absent — not a
-  typo or a missing import). Commit that test on its own with a message beginning
+- FAILING TEST FIRST (mandatory). Follow the `superpowers:test-driven-development`
+  skill (load it and apply its red→green discipline). For each unit of behavior,
+  BEFORE writing the implementation: write the test, run it, and confirm it FAILS
+  for the right reason (the behavior is genuinely absent — not a typo or a missing
+  import). Commit that test on its own with a message beginning
   `test(failing): <behavior>`. THEN implement until it passes and commit the
   implementation separately. The runner gates this red→green order mechanically
   (it requires a `test(failing):` commit before the impl) and the independent

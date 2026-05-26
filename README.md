@@ -10,15 +10,7 @@ the model's say-so.
 It is deliberately minimal. It owns **governance and traceability** and *delegates*
 discovery and generic engineering (brainstorming, TDD, code review, worktrees) to
 Anthropic's official plugins — **superpowers** and **pr-review-toolkit** — instead of
-re-implementing them. Two ideas run through it:
-
-- **Verification is observing the real artifact** at its surface (a CLI's output, an
-  HTTP response, a return value, a log line, the DOM) — distinct from tests and
-  typechecks, which are CI's job — and it is carried from the PRD forward, not bolted
-  on at the end.
-- **You keep live visibility into a build.** Because implementation runs detached, a
-  read-only progress view lets you watch a run without leaving (or blocking) your
-  session.
+re-implementing them.
 
 ---
 
@@ -32,35 +24,33 @@ One-time, per repo:
 
 Then each feature or change is **one lap** of the loop below. Rule of thumb:
 **one fresh session per command** — `/clear` (or a new session) at every phase
-boundary, after each GitHub merge and before the next command. This cuts against the
-usual Claude Code habit of keeping one long conversation going, but it's deliberate:
+boundary, after each GitHub merge and before the next command. This is deliberate:
 throughline's state of record lives in **git + `docs/`**, not the chat, so each phase
 re-reads the merged result and a clear only drops the previous interview's noise — you
-lose no progress (the *When to `/clear`* note below has the details). The interactive
-phases (`/prd-author`, `/tdd-author`, `/bootstrap-project`) pair well with **`/fast`**
-(faster Opus output for snappy interviews); leave it off for `/implement`, which runs
-detached and unattended.
+lose no progress and avoid the model over anchoring on context from the previous phase.
+The interactive phases (`/prd-author`, `/tdd-author`, `/bootstrap-project`) pair well
+with **`/fast`** (faster Opus output for snappy interviews); leave it off for
+`/implement`, which runs detached and unattended.
 
 **1. Requirements** — *fresh session*
 - `/prd-author` → interviews you and writes `docs/PRD.md` (the WHAT and WHY; each
-  requirement gets an **observable acceptance criterion**), then opens a **PRD PR**.
-  It never merges.
+  requirement gets an **observable acceptance criterion**), then opens a **PRD PR** for
+  a human reviewer.
 - **GitHub:** review and **merge the PRD PR** — that approves the requirements, and
   its commit is the baseline `/tdd-author` diffs against.
-- `/clear`.
+- Pull `main` current, do a `/clear` or start a new session.
 
-**2. Design** — *fresh session*
+**2. Design** — *fresh session, on `main`, pulled current
 - `/tdd-author` → diffs the PRD, proposes the TDD set (you approve), writes the TDDs
   as `draft` (each with a requirement-traceability table and a **verification plan**),
   self-reviews, creates any ADRs (it invokes `/adr-new` itself), runs the independent
   **design-critique gate**, and opens the **design PR** (TDDs + ADRs, with the
-  critique verdict in the body). It never merges.
-- **GitHub:** review and **merge the design PR.** *This merge is the build trigger* —
-  it lands the `draft` TDDs on `main`, which is what makes them buildable. There is no
-  manual `Status: ready` step.
-- `/clear`.
+  critique verdict in the body).
+- **GitHub:** Human reviews and **merges the design PR.** *This merge is the build gate* —
+  it lands the `draft` TDDs on `main`, which is what makes them buildable.
+- Pull `main` current, do a `/clear` or start a new session.
 
-**3. Build** — *fresh session, on `main`, pulled current*
+**3. Build** — *fresh session, on `main`, pulled current
 - `/implement` → confirms the queue (every TDD merged to `main` and not yet
   `implemented`) and the mode, then launches a **detached** runner and hands control
   back. Each TDD builds failing-test-first and must pass **four gates** — test-first,
@@ -75,23 +65,14 @@ detached and unattended.
   *stacked* — merge **bottom-up in the report's "Merge plan" order**, with a
   merge-commit or rebase-merge (a squash breaks the stack; use `/implement --combined`
   for one squashable PR).
-- `/clear` before the next lap.
+- Pull `main` current, do a `/clear` and start the next lap.
 
-Next lap: `/prd-author` *updates* the existing PRD, and the cycle repeats — and you
-don't have to wait for a build to finish first. Because `/implement` runs detached in
-an isolated worktree, you can start the next lap's `/prd-author` / `/tdd-author` while
-a build is still running; a single-run lock holds off only a second `/implement`, so
-you can't accidentally double-build.
+After the first round, `/prd-author` *updates* the existing PRD.  Because `/implement`
+runs detached in an isolated worktree, you can start the next lap's `/prd-author` /
+`/tdd-author` while a build is still running; a single-run lock holds off a second
+`/implement`, so you can't accidentally cause a race with two builds running at once.
 
-### When to `/clear`
-One fresh session per command — three clears per lap (before `/tdd-author`, before
-`/implement`, before the next `/prd-author`). This is safe because the state of
-record lives in **git + `docs/`**, not the chat: each phase re-reads the merged
-`main`, so a clear only drops the previous interview's noise. Do **not** `/clear`
-*during* `/implement` — it runs detached in its own processes, so the session stays
-clean on its own (you can even close the terminal).
-
-### Feedback edges (not the happy path)
+### Feedback edges (the unhappy path)
 - **Design blocker at build time:** `/implement` appends infeasible or contradictory
   requirements to `docs/tdd/BLOCKERS.md` and halts → re-run `/tdd-author` (it reads
   BLOCKERS.md), merge the design PR, re-run `/implement`.
@@ -107,7 +88,7 @@ clean on its own (you can even close the terminal).
 throughline/
 ├── .claude-plugin/{plugin.json, marketplace.json}
 ├── agents/
-│   ├── security-reviewer.md  # in-gate security review (built-in /security-review needs an origin remote)
+│   ├── security-reviewer.md  # in-gate security review
 │   └── design-reviewer.md    # independent design critique before the design PR
 │   # build → superpowers:TDD; code review → pr-review-toolkit (see ADR 0003)
 ├── skills/
@@ -153,17 +134,16 @@ flips to `implemented` only after **four independent gates**, each in its own pr
    (mechanical, read straight from git history; the build follows
    `superpowers:test-driven-development`).
 2. **`verify.sh`** — mechanically re-runs the project's tests + typecheck + linter.
-   This is *CI's job* — running tests, not verification. Package-manager-aware
-   (pnpm/yarn/bun/npm) and prefers your declared `test` / `typecheck` / `lint`
-   scripts; clippy runs at `-D warnings`.
-3. **Runtime verification** — drives the *built artifact* to where the change is
+   Package-manager-aware (pnpm/yarn/bun/npm) and prefers your declared `test` /
+   `typecheck` / `lint` scripts; clippy runs at `-D warnings`.
+4. **Runtime verification** — drives the *built artifact* to where the change is
    observable and confirms the TDD's verification plan holds, capturing the evidence.
    Reports `PASS` / `FAIL` / `BLOCKED` / `SKIP` (a change with no observable surface
    may `SKIP` with justification, never silently); passing tests alone are not enough.
    The *mechanism* is the project's — throughline ships no harness, delegating to
    `superpowers:verification-before-completion` / `/verify`
    ([ADR 0004](docs/adr/0004-verification-is-observation-governed-not-bundled.md)).
-4. **Independent review** — a separate `claude -p` on a **different model** (sonnet vs
+5. **Independent review** — a separate `claude -p` on a **different model** (sonnet vs
    an opus build, so it doesn't share the author's blind spots) fans out to
    `pr-review-toolkit:code-reviewer` + `silent-failure-hunter` +
    `throughline:security-reviewer` and must return `REVIEW_RESULT: PASS`.
@@ -207,9 +187,9 @@ Builds run detached, so you keep visibility without blocking or leaving your ses
   refreshes until you press Ctrl-C. It only *reads* the run-state record, so the
   detached build is unaffected, and your session is intact when you exit.
 
-It is **read-only observability** — the percent is an honest estimate (never implying
-precision), and the view offers no pause / resume / cancel. Both views read one
-machine-readable run-state record the runner maintains under the run's log dir.
+It is **read-only observability** — the percent is an estimate, and the view offers
+no pause / resume / cancel. Both views read one machine-readable run-state record
+the runner maintains under the run's log dir.
 
 ## Design discipline (wired in)
 

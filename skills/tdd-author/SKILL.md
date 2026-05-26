@@ -113,12 +113,12 @@ ADR constraints: <accepted ADR numbers this design respects>
 ## Decisions to promote (ADR candidates)
 ```
 
-## 6. ADR evaluation (do not skip)
+## 6. ADR evaluation
 Evaluate the whole set you just wrote against the existing ADRs and present
 recommendations for approval — analyze, don't merely ask:
 - **New-ADR candidates** — durable, cross-cutting decisions or patterns not yet
-  captured. A pattern shared across several of these related TDDs is a strong
-  candidate.
+  captured. A pattern shared across several of the new and/or existing TDDs is
+  a strong candidate.
 - **Supersession candidates** — anything conflicting with or reversing an
   accepted ADR.
 For each: proposed action, one-line rationale, confidence (mark low-confidence
@@ -162,11 +162,9 @@ conflicts, and scope coherence, ending with `DESIGN_REVIEW: PASS` or
 
 ## 8. Close-out
 Report which TDDs were written (as `draft`) and which existing TDDs you
-recommend revising. TDDs stay `draft` — there is NO manual `Status: ready` step.
-Merging the design PR lands them on the integration branch, and THAT is what
-makes them buildable: after the merge the user runs `/implement`, which builds
-every TDD the merge delivered (numeric order). To build only some of a merged
-set, pass paths: `/implement docs/tdd/NNNN-<slug>.md`.
+recommend revising. TDDs stay `draft`.  Merging the design PR lands them on the
+integration branch, and THAT is what makes them buildable: after the merge the
+user runs `/implement`, which builds every TDD the merge delivered.
 
 ## 9. Git (phase gate — the human design review)
 Unless the user says "skip git":
@@ -179,4 +177,4 @@ Unless the user says "skip git":
   verdict + findings summary (and any waivers) in the PR body, so the human
   reviews an INFORMED design, not a bare diff. Do NOT merge — the human merge of
   this PR is the design gate: merging is what makes the TDDs buildable, so they are
-built only after it lands.
+  built only after it lands.

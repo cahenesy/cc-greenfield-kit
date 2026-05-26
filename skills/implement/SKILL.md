@@ -1,13 +1,12 @@
 ---
 name: implement
-description: Build TDDs unattended. With no argument, implements every TDD that has been merged to the integration branch and is not yet `implemented`, as a batch (a batch of one is fine). Pass a TDD path to build just that one. Confirms the queue, then launches the build itself as a detached background job so your session stays clean. Invoke with /implement.
+description: Turn features described in the PRD and designed in TDDs into code and tests, unattended. With no argument, implements every TDD that has been merged to the integration branch and is not yet `implemented`, as a batch (a batch of one is fine). Pass a TDD path to build just that one. Confirms the queue, then launches the build itself as a detached background job so can do further PRD and TDD updates while it builds. Invoke with /implement.
 disable-model-invocation: true
 ---
 
 # Implement
 
-The single entry point for turning TDDs into code. One merged TDD or seven — same
-command, no manual batch/single distinction.
+The single entry point for turning TDDs into code.
 
 ## Scope
 - `/implement <tdd-path>` → build just that TDD.
@@ -15,10 +14,9 @@ command, no manual batch/single distinction.
   integration branch (origin's default / `main` / `master`; override with
   `THROUGHLINE_INTEGRATION_BRANCH`) and is not yet `implemented`, in numeric order.
   **The design-PR merge is what makes a TDD buildable** — merging lands it on the
-  integration branch at `draft`, and that is the go-signal. There is no manual
-  `Status: ready` step (a hand-set `ready` is still honored for back-compat). An
-  un-merged draft on a design branch is not on integration, so the PR stays the
-  gate. TDDs at `Status: implemented` are skipped — that flip is the done-signal.
+  integration branch at `draft`, and that is the go-signal. An un-merged draft on
+  a design branch is not on integration, so the PR stays the gate. TDDs at
+  `Status: implemented` are skipped — that flip is the done-signal.
 - Re-run safety: the flip to `implemented` is committed on the build branch, not
   on the integration branch, until you merge. So a re-run before merging would
   otherwise see the TDD as still buildable and rebuild it. The runner prevents
@@ -33,9 +31,9 @@ command, no manual batch/single distinction.
      `build/<change>/<slug>` branch STACKED on the previous, with ONE PR PER TDD.
      Dependencies are respected, and each feature stays a separately reviewable
      human gate. A failure halts the run and marks downstream TDDs BLOCKED.
-   - **`--combined`:** one shared `build/<change>` branch and ONE PR for the whole
+   - **Combined:** one shared `build/<change>` branch and ONE PR for the whole
      set. Use only for a small, tightly-coupled set you want to review together.
-   - **`--parallel`:** a `feat/<slug>` worktree + PR per feature. INDEPENDENT
+   - **Parallel:** a `feat/<slug>` worktree + PR per feature. INDEPENDENT
      features only. Multiplies token usage; may hit rate limits.
 3. The runner and its prompts/verify gate live in the plugin and run straight
    from `${CLAUDE_PLUGIN_ROOT}/scripts/` — they are NOT copied into the repo, so
@@ -48,12 +46,12 @@ command, no manual batch/single distinction.
 ## Run (launch it yourself, detached)
 Implementation runs in separate `claude -p` processes, never in this session —
 fresh context per feature, and this session stays clean. Every mode also builds
-inside a DEDICATED git worktree (sequential/combined share one; parallel uses one
-per feature), so the detached runner never switches branches or commits in the
-working tree your live session is using — only the build branches it produces
-persist. After the user confirms the queue and mode (step 1–2 above), LAUNCH the
-runner yourself as a detached background job and return control immediately. Do
-not print a command for the user to run.
+inside at least one DEDICATED git worktree (sequential/combined share one;
+parallel uses one per feature), so the detached runner never switches branches
+or commits in the working tree your live session is using — only the build
+branches it produces persist. After the user confirms the queue and mode (step
+1–2 above), LAUNCH the runner yourself as a detached background job and return
+control immediately. Do not print a command for the user to run.
 
 Launch with a single Bash call (adjust flags for the confirmed mode/scope):
 
@@ -66,7 +64,7 @@ echo "launched pid $!"
 
 `nohup … &` survives the session closing and does not block, so the build runs
 unattended while the session stays free. Variants: append a TDD path to build
-one; add `--parallel` for independent features.
+one; add `--parallel` if the user selected Parallel mode.
 
 After launching, report: the PID, that it is running detached, and the log
 location. The user can watch with `tail -f docs/tdd/.implement-logs/<ts>/report.md`

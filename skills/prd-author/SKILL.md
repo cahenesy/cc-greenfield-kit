@@ -90,8 +90,20 @@ Fix and move on (no re-review loop) then commit and open the PR.
 Unless the user says "skip git":
 - Work on a branch `docs/prd/<change-slug>` off `main`.
 - Commit `docs/PRD.md` with a message like "PRD: <summary of change>".
-- Open a PR with `gh pr create --fill` (base `main`). Do NOT merge — the merge
-  is the human approval gate.
+- **Cascade audit (in the commit message body).** If the PRD change makes any
+  existing TDD or accepted ADR stale — typical for scope-tightening,
+  mode-changing, or surface-redefining edits; rare for purely additive ones —
+  enumerate the downstream cascade explicitly: which TDDs become stale and need
+  **revision** (`draft`/`ready`) or **supersession** (`implemented` — see
+  `tdd-author` step 3), and which ADRs are pressured and need refinement or
+  supersession. This list becomes the explicit starting context for the next
+  `/tdd-author` session and makes the design intent of the PRD change auditable.
+  For purely additive PRD changes with no downstream cascade, write "Cascade:
+  none" so the absence is intentional, not an oversight.
+- Open a PR with `gh pr create --fill` (base `main`). `--fill` carries the
+  commit message into the PR body, so the cascade audit travels with the PR.
+  Do NOT merge — the merge is the human approval gate.
 - Tell the user to merge the PRD PR before running `/tdd-author`, so design
   builds on approved requirements. (The PRD commit history is also what
-  `/tdd-author` diffs to scope the design work.)
+  `/tdd-author` diffs to scope the design work; the cascade audit tells it
+  where to look first.)

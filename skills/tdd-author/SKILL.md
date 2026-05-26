@@ -44,16 +44,34 @@ step-by-step build script — the bite-sized failing-test-first task breakdown i
 ## 3. Decide the set of TDDs (the key judgment)
 From the delta and the coverage map, identify:
 - **New** requirements with no covering TDD  → new TDD(s).
-- **Changed** requirements whose covering TDD is now stale  → flag that TDD for
-  revision, noting what changed; propose an update if warranted.
+- **Changed** requirements whose covering TDD is now stale  → **revise OR
+  supersede, per the covering TDD's `Status`**:
+  - `draft` or `ready` → in-place revision is allowed (the TDD isn't built yet).
+    Bump the `PRD-rev` to the SHA you're designing against; otherwise the same
+    file.
+  - `implemented` → **supersede with a new TDD**. The throughline pipeline is
+    append-only on substance for implemented design documents (the same rule
+    `adr-new` enforces for accepted ADRs): an implemented TDD is a historical
+    record of what was built, why, and against which constraints. Substantive
+    changes get a *new* TDD that carries `Supersedes: NNNN` in its frontmatter
+    and re-states the design from the new ground truth — what's carried
+    forward, what's changed, and why. Only the old TDD's `Status:` line is
+    edited (set to `superseded by NNNN`); its body stays as written. Never
+    rewrite an implemented TDD's substance in place.
 - **Unchanged/covered** requirements  → leave alone.
 Group related requirements into coherent units of work — one TDD per unit.
 Decide the count and the scope of each; don't split arbitrarily or lump
 unrelated work together.
 
+Scope-tightening PRD changes (a requirement is removed, a configuration moves
+to a non-goal, two surfaces collapse to one) typically produce more supersession
+work than additive PRD changes — multiple implemented TDDs may become stale at
+once. Surface that in the plan rather than minimizing it.
+
 Present this PLAN to the user before writing: the TDDs you intend to create
-(scope + which requirements each covers) and any existing TDDs you recommend
-revising. Get approval; adjust as directed.
+(scope + which requirements each covers), and per existing-TDD impact, whether
+you intend to **revise in-place** (draft/ready) or **supersede** (implemented).
+Get approval; adjust as directed.
 
 ## 4. Load design constraints
 Read `docs/adr/INDEX.md`. Treat only `accepted` ADRs as binding; pull full ADR
@@ -119,6 +137,7 @@ Status: draft | ready | implemented
 PRD refs: <requirement numbers satisfied>
 PRD-rev: <git short SHA of docs/PRD.md at authoring time>
 ADR constraints: <accepted ADR numbers this design respects>
+Supersedes: <NNNN, only when this TDD replaces a previously-implemented one>
 
 ## Approach
 ## Components & interfaces

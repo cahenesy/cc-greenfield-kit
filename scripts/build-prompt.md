@@ -28,6 +28,27 @@ Build discipline:
   end with `BATCH_RESULT: BLOCKED new dependency needed: <name> (<why>)` so
   /tdd-author can weigh it and its alternatives and update the design.
 
+Build-phase boundaries (these belong to OTHER gates — your job is to write code
+and commit it, not to drive the running artifact):
+- DO NOT spawn nested `claude` processes from inside the build (no `claude -p
+  ...` from Bash, no embedded sub-claude orchestration). Driving the built
+  artifact to verify its behavior is the runtime-verify gate's job, run by the
+  runner in a SEPARATE process AFTER your build returns. If you spawn nested
+  claude during build you are doing gate 3's work in gate 1, on the wrong
+  process, with no verdict line the runner can parse.
+- DO NOT use `pkill`, `killall`, or ANY pattern-based process killing
+  (`pkill -f`, `pgrep | xargs kill`, etc.). A pattern broad enough to find your
+  test invocations is almost certainly broad enough to match the runner's own
+  `claude -p` parent — and killing your own parent ends the build with no
+  `end_turn`, producing an empty log and a FAIL with no actionable diagnostic.
+  If you must kill child processes you yourself spawned, track each child's PID
+  from `$!` and kill ONLY those PIDs.
+- DO NOT create runtime-driving fixtures in `/tmp` or anywhere outside the
+  repo. The failing-test-first gate inspects commits; `verify.sh` runs the
+  committed test suite + typecheck + lint. Both look at what is IN the repo.
+  Out-of-repo `/tmp/...` fixtures and ad-hoc scratch dirs are gate 3's surface,
+  not gate 1's — and they leave debris the runner cannot clean up.
+
 Design blockers (the feedback edge): if a requirement is infeasible,
 self-contradictory, or cannot be implemented without breaking an accepted ADR,
 do NOT silently work around it. Stop and end with

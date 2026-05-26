@@ -150,16 +150,47 @@ fi
 echo "Queue (${#TDDS[@]}):"; printf '  %s\n' "${TDDS[@]}"; echo "Report: $REPORT"; echo
 
 # --- per-TDD primitives (cwd = the repo or worktree they run in) ---------------
+# record_session_pointer: `claude -p` redirects only its FINAL assistant message
+# (the `end_turn` text) to stdout. If a run ends without `end_turn` — turn cap,
+# external kill, ratelimit, or the build accidentally pkill'ing its own parent —
+# the redirected log is near-empty, and the runner's `FAIL (no BATCH_RESULT;
+# see log)` is correct but useless for triage. The full transcript still exists
+# at ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl. This helper finds it (newest
+# .jsonl in the cwd-encoded project dir, modified at or after the call started)
+# and appends a `THROUGHLINE_SESSION:` pointer plus the last few tool calls to
+# the log, so a FAIL like that is diagnosable from the log itself.
+record_session_pointer() {  # <log> <start-epoch>
+  local log="$1" start="$2" enc proj sess
+  enc="$(printf '%s' "$PWD" | sed 's|/|-|g')"
+  proj="$HOME/.claude/projects/$enc"
+  [ -d "$proj" ] || return 0
+  sess="$(find "$proj" -maxdepth 1 -name "*.jsonl" -newermt "@$start" -printf '%T@\t%p\n' 2>/dev/null \
+            | sort -rn | head -1 | cut -f2)"
+  [ -n "$sess" ] || return 0
+  {
+    echo
+    echo "THROUGHLINE_SESSION: $sess"
+    if command -v jq >/dev/null 2>&1; then
+      echo "Last assistant tool calls (newest last; up to 5):"
+      jq -r 'select(.type=="assistant") | .message.content // [] | .[] | select(.type=="tool_use") | "  \(.name)\t\((.input|tostring)[:140])"' \
+        "$sess" 2>/dev/null | tail -5
+    fi
+  } >>"$log"
+}
 build_one() {  # <tdd> <log>
   local tdd="$1" log="$2" prompt; prompt="$(sed "s#{{TDD}}#${tdd}#g" "$TMPL")"
   local args=(-p "$prompt" --permission-mode auto); [ -n "$MODEL" ] && args+=(--model "$MODEL")
+  local start; start=$(date +%s)
   claude "${args[@]}" >>"$log" 2>&1
+  record_session_pointer "$log" "$start"
 }
 review_one() {  # <tdd> <base-ref> <log>
   local tdd="$1" base="$2" log="$3" prompt
   prompt="$(sed -e "s#{{TDD}}#${tdd}#g" -e "s#{{BASE}}#${base}#g" "$RTMPL")"
   local args=(-p "$prompt" --permission-mode auto); [ -n "$REVIEW_MODEL" ] && args+=(--model "$REVIEW_MODEL")
+  local start; start=$(date +%s)
   claude "${args[@]}" >>"$log" 2>&1
+  record_session_pointer "$log" "$start"
 }
 # Runtime-verify gate (FR-25 / FR-26 / ADR 0004): drives the BUILT artifact to
 # the TDD's verification observation points in a FRESH `claude -p` process — so
@@ -174,7 +205,9 @@ verify_runtime_one() {  # <tdd> <base-ref> <log>
   local tdd="$1" base="$2" log="$3" prompt
   prompt="$(sed -e "s#{{TDD}}#${tdd}#g" -e "s#{{BASE}}#${base}#g" "$RVMTPL")"
   local args=(-p "$prompt" --permission-mode auto); [ -n "$MODEL" ] && args+=(--model "$MODEL")
+  local start; start=$(date +%s)
   claude "${args[@]}" >>"$log" 2>&1
+  record_session_pointer "$log" "$start"
 }
 build_status()          { grep -aoE 'BATCH_RESULT: (OK|FAIL.*|BLOCKED.*)' "$1" 2>/dev/null | tail -1; }
 review_status()         { grep -aoE 'REVIEW_RESULT: (PASS|BLOCK.*)' "$1" 2>/dev/null | tail -1; }

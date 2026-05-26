@@ -40,6 +40,13 @@ Verdicts (NFR-4 — keep them distinct, never conflate):
   internal refactor with no observable surface) and you confirm there is
   nothing to observe. Never silent — always justified.
 
+Cleanup safety: if you spawn background processes to drive the artifact, kill
+them by their tracked PID (captured from `$!`), NEVER with `pkill -f <pattern>`
+or `killall`. A pattern broad enough to find your test invocations may match
+the runner's own `claude -p` parent — ending this gate with no verdict line
+and producing a FAIL with no actionable evidence. Track child PIDs explicitly
+and kill only those.
+
 Print the evidence (commands run, outputs captured, comparisons made) ABOVE the
 verdict line. Then end your message with EXACTLY one verdict line above. Do not
 invent observations to look thorough — if the plan honestly SKIPs, SKIP.

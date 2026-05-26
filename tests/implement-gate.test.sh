@@ -3,8 +3,10 @@
 #
 # The kit's core quality claim is that a build cannot mark itself "done": the
 # ready->implemented flip is gated on failing-test-first discipline, an INDEPENDENT
-# mechanical verify (tests+typecheck+lint), and an INDEPENDENT review process, and
-# a failure halts the dependent stack. This eval proves those gates actually fire,
+# mechanical verify (tests+typecheck+lint), an INDEPENDENT runtime-verify gate
+# that drives the built artifact at its observable surface (per the TDD's
+# `## Verification plan`), and an INDEPENDENT review process — and a failure
+# halts the dependent stack. This eval proves those four gates actually fire,
 # using a stub `claude` (so no model/tokens are needed) and a controllable verify
 # command.
 #
@@ -55,7 +57,7 @@ EOF
 prompt=""
 while [ $# -gt 0 ]; do case "$1" in -p) prompt="$2"; shift 2;; *) shift;; esac; done
 slug="$(printf '%s' "$prompt" | grep -oE 'docs/tdd/[0-9]+-[a-z]+' | head -1 | sed 's#docs/tdd/##')"
-if printf '%s' "$prompt" | grep -q 'runtime-verification gate'; then
+if printf '%s' "$prompt" | grep -q 'INDEPENDENT runtime-verification gate'; then
   cat "$STUBDIR/runtime-$slug" 2>/dev/null || echo "VERIFY_RUNTIME: PASS"
   exit 0
 fi

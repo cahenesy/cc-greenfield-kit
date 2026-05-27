@@ -288,6 +288,134 @@ processes can kill its own parent. These requirements codify those properties.
   the only sanctioned cleanup; for any preserved runtime-verify session JSONL,
   no `Bash` tool call uses `pkill` or `killall`.
 
+### Run recovery & restart resilience
+Long-running and interactive throughline flows can be interrupted by causes
+that are not programming errors: Anthropic usage limits, host reboots, manual
+process kills, transient network/API errors, and — in interactive sessions —
+automatic context compaction or session loss before a document is committed.
+Restarting from scratch on each interruption burns tokens and erases detail the
+user already supplied that did not make it to disk. This area carries
+continuity from the last observable progress point forward, as a continuation
+of the existing run/skill (not a separate "recovery mode" the user has to
+think about).
+
+#### Detached `/implement` runs
+- **FR-39 Interrupted-run detection.** Re-invoking `/implement` after a prior
+  run did not exit cleanly recognizes that prior run from its persisted state
+  (FR-27) and surfaces it before doing any work, identifying which TDD and
+  which gate it was at and why it stopped (recoverable cause vs. failure). The
+  user decides whether to resume or start fresh; the runner does not act
+  silently. — Acceptance: launching `/implement` after a prior runner is
+  killed mid-build prints a one-line summary naming the interrupted TDD and
+  gate and waits for the user's resume/fresh decision before any build work;
+  launching `/implement` when there is no non-terminal prior run proceeds
+  normally without prompting.
+- **FR-40 Gate-level resume.** On resume, the runner continues the interrupted
+  TDD at the first of the four gates (FR-15) that did not complete; gates that
+  did complete are not re-run. The persisted run-state record (FR-27) is the
+  source of truth for which gates completed; the build branch's committed
+  history is the source of truth for the build gate's output (so the resumed
+  later gates run against the same on-disk state the interrupted run left, not
+  against untrusted in-flight worktree edits). — Acceptance: a TDD
+  interrupted after gate 2 (verify.sh) and before gate 3 (runtime-verify),
+  when resumed, produces no new gate-1 or gate-2 output in the per-TDD log
+  between the resume timestamp and the runtime-verify output; the resumed
+  TDD's build branch HEAD contains the same gate-1 commits as before the
+  interruption, with only the resumed-from gate's downstream commits (if any)
+  added.
+- **FR-41 Recoverable-cause classification.** The runner distinguishes
+  recoverable causes (usage-limit / ratelimit, transient network/API error)
+  from fatal causes (genuine FAIL verdict, malformed verdict, unexpected
+  error). Recoverable causes halt the run cleanly into a *paused* state that
+  FR-39 can detect and resume; fatal causes follow the existing FAIL pathway
+  (FR-16, FR-17) and are not auto-resumed. — Acceptance: a run terminated by
+  a simulated usage-limit cause leaves the run-state record (FR-27) in a
+  paused, resumable shape distinguishable from `failed`, and triggers FR-39's
+  resume prompt on the next `/implement`; a run terminated by a fatal cause
+  leaves the existing FAIL state and does not trigger the resume prompt.
+- **FR-42 Bounded in-gate retry on transient errors.** A transient error
+  encountered during a gate (FR-41 classification) is retried within the gate
+  a bounded number of times before promoting to a paused halt. A successful
+  retry continues the gate normally and contributes a single verdict;
+  unsuccessful retries hand off to FR-41's paused state. — Acceptance: a gate
+  whose underlying call fails transiently and then succeeds within the retry
+  budget produces a single PASS verdict, with the per-TDD log showing the
+  intermediate transient errors and their retries as auditable entries; a
+  gate whose transient failures exhaust the budget leaves the run in FR-41's
+  paused state, not `failed`.
+- **FR-43 Stale single-run lock reclaim.** The single-run lock from FR-18 is
+  reclaimed automatically when its prior owner is no longer alive, so a
+  recoverable interruption does not require the user to manually clear files
+  before resuming. A live lock owner still blocks a second run. — Acceptance:
+  after a prior `/implement` is forcibly killed, the next `/implement`
+  proceeds without manual lock cleanup; while a prior `/implement` is alive,
+  a second `/implement` still refuses with the existing lock-conflict
+  message.
+- **FR-44 Persisted-state durability.** The run-state record (FR-27) remains
+  parseable and internally consistent at any point during a run; a reader
+  (including a resuming `/implement`) never observes half-written or corrupt
+  state. Mid-write interruption never causes a subsequent run to misclassify
+  a TDD's progress. — Acceptance: reading every fragment of the active run's
+  state at arbitrary points during the run yields valid, parseable content;
+  a forced interruption mid-transition leaves each fragment showing either
+  the prior transition or the new one, never an intermediate broken state.
+- **FR-45 Paused status in the progress view.** `/implement-status` and the
+  live-follow view (FR-28, FR-29) surface a paused run distinctly from
+  `building`, `failed`, `blocked`, and `done`, and point the user at the
+  re-invocation that will resume. NFR-4's verdict honesty applies: a paused
+  run is never reported as `failed`, and vice versa. — Acceptance: invoking
+  `/implement-status` on a paused run prints a status block that includes the
+  word "paused", the recoverable cause (ratelimit / transient), and an
+  instruction to re-run `/implement` to resume; on a `failed` run it does
+  not.
+
+#### Interactive `/prd-author` and `/tdd-author` sessions
+- **FR-46 Incremental persistence of elicited interview detail.** While
+  `/prd-author` and `/tdd-author` interview the user, the substantive detail
+  elicited (answered questions, requirements drafted, ADR actions proposed)
+  is persisted incrementally to a transient draft as the interview proceeds,
+  so an interruption between elicitation and the final committed doc is
+  recoverable. Persistence is per substantive elicitation, not buffered until
+  the end. — Acceptance: after answering several questions in `/prd-author`
+  and then killing the session, a draft file exists in the working tree
+  containing all answered detail from before the kill; killing the session
+  before any answered elicitation leaves no orphaned draft.
+- **FR-47 Restart detects and offers to resume from draft.** On re-invocation,
+  `/prd-author` and `/tdd-author` detect a draft left by an earlier
+  interrupted session and offer to resume from it (rehydrating detail the new
+  session would otherwise re-elicit) before starting a fresh interview. The
+  user may decline; declining starts fresh and discards the prior draft.
+  — Acceptance: re-running `/prd-author` after the kill from FR-46 prompts
+  the user to resume with a one-line summary of the draft's scope (timestamp
+  and how much detail it contains); confirming resume causes the continued
+  interview to build on the elicited detail rather than re-ask for it.
+- **FR-48 Draft survives intra-session compaction.** When automatic context
+  compaction occurs *within* a still-running interactive skill session,
+  detail elicited and persisted to the draft (FR-46) before the compaction
+  is recovered into the post-compaction working state. The skill does not
+  silently lose interview detail to compaction. — Acceptance: in a session
+  where compaction occurs after several elicitations, the final committed
+  PRD/TDD reflects the pre-compaction elicitations (verifiable by content
+  match against the draft's prior state), not only the post-compaction-visible
+  turns.
+- **FR-49 Draft lifecycle bounded by skill completion.** A draft from
+  `/prd-author` or `/tdd-author` is removed when the skill completes its
+  normal path (opening the PRD / design PR per FR-6 / FR-11) and persists
+  otherwise. Drafts are transient interview state, not project artifacts;
+  they are never committed to version control. — Acceptance: after a normal
+  `/prd-author` completion that opens the PRD PR, no draft is left in the
+  working tree; after killing `/prd-author` mid-interview, a draft is present
+  in the working tree; in either scenario `git ls-files` shows no tracked
+  draft files.
+- **FR-50 Design-reviewer is not cached across sessions.** When `/tdd-author`
+  resumes from a draft, the design-reviewer (FR-10) is run fresh on the
+  restored design, not reused from any prior session's verdict. Reviewer
+  independence is preserved across resumption (NFR-3 model diversity is
+  unaffected). — Acceptance: a `/tdd-author` session that resumes after the
+  prior session's design-reviewer had already produced a verdict opens a
+  design PR whose body carries a freshly-issued reviewer verdict
+  (timestamped after the resume), not the prior session's verdict.
+
 ### Quality hook & delegation
 - **FR-21 Format + lint hook.** A `format-and-lint` PostToolUse hook formats then
   lints edited files when a linter is configured (no-op otherwise), debounced, for
@@ -354,6 +482,19 @@ processes can kill its own parent. These requirements codify those properties.
   plus a short tool-call tail. The full transcript (often hundreds of KB to several
   MB per gate) stays in `~/.claude/projects/...` for inspection; inlining it would
   bloat the log without aiding triage.
+- **Recovering Claude's in-turn working memory** — the recovery features
+  (FR-39 onward) cover only detail observably elicited from the user and
+  persisted to disk, or progress committed to a build branch. There is no
+  attempt to preserve the model's mid-turn reasoning state.
+- **Surviving deletion of the run-state or draft files** — removing
+  `docs/tdd/.implement-logs/` or the interactive draft is the user's explicit
+  fresh-start lever; resume (FR-39, FR-47) is impossible afterward by design.
+- **Auto-resuming on host reboot** — the user re-invokes `/implement` (or the
+  interactive skill); the plugin does not run a watchdog or daemon to bring
+  runs back up. FR-39 / FR-47 handle the rest from the next invocation.
+- **Recovering uncommitted edits in a build worktree** — committed history on
+  the build branch is the source of truth across a resume (FR-40); any
+  uncommitted edits left by an unclean shutdown are discarded.
 
 ## Constraints & assumptions
 
@@ -389,9 +530,36 @@ processes can kill its own parent. These requirements codify those properties.
 - The tool-call tail rendered into the gate log (FR-36) requires `jq` on PATH;
   without it, only the `THROUGHLINE_SESSION:` pointer is written and the user can
   inspect the JSONL manually. The runner does not vendor `jq`.
+- A *resumable* halt (FR-39, FR-47) requires the persisted run-state record
+  (FR-27) and any draft (FR-46) to still exist at re-invocation; if the user
+  removes them between interruption and re-invocation, recovery is impossible
+  by design (see corresponding non-goal).
+- Recoverable-cause classification (FR-41) is pattern-based on the child
+  process's exit signal and stderr; cause patterns the runner does not yet
+  recognise fall through to `failed`, never to a false `paused` state — the
+  NFR-4 honesty rule applies (ambiguity resolves to FAIL, never to a false
+  PASS or a false paused).
+- A paused run has no automatic expiration; it remains resumable indefinitely
+  provided the state and draft files are intact and the plugin schema is
+  compatible (see open question on version skew).
 
 ## Open questions
 
 - **Acceptance-criterion backfill.** FR-24 applies going forward and to this update's
   new requirements; whether and when to retrofit observable acceptance criteria onto
   the pre-existing FR-1–FR-22 is open (out of scope for this update).
+- **Retry-budget tuning (FR-42).** The bounded retry count and backoff for
+  transient errors is left to the TDD; whether it is fixed, env-configurable,
+  or cause-specific is open.
+- **Plugin schema skew across pause and resume.** If the plugin updates
+  between a paused interrupt and a resume (e.g. FR-34 reconciliation runs
+  between them), the compatibility guarantees on the persisted run-state and
+  draft formats are TBD — likely schema-versioning, but the policy is open.
+- **Pause TTL (FR-39, FR-47).** Whether a very old paused run (e.g. weeks
+  old) should be treated as stale and require an explicit resume flag rather
+  than the FR-39/FR-47 prompt is open; today there is no TTL.
+- **Token-usage optimization.** A separate investigation, not in this PRD —
+  the parent ask included a hypothesis that throughline's per-flow token spend
+  has grown and warrants targeted reduction. Concrete opportunities will be
+  surfaced by a follow-up investigation and any resulting requirements PRD'd
+  individually.

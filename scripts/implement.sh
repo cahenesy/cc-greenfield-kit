@@ -1169,10 +1169,23 @@ if [ -f "${MAINREPO:-$PWD}/docs/tdd/BLOCKERS.md" ]; then
   { echo; echo "Design blockers were recorded in docs/tdd/BLOCKERS.md — run /tdd-author to revise the design, then re-run /implement."; } >>"$REPORT"
 fi
 
-# Mark the run-state record as done (FR-27) so a later status.sh on this logdir
-# sees the terminal rollup. The lock is still held; it's the trap on EXIT that
-# releases it, after which the renderer's "no active /implement run" path takes
-# over.
-set_run_state done
+# Mark the run-state record as terminal (FR-27) so a later status.sh on this
+# logdir sees the rollup. If any TDD paused (TDD 0011 / FR-41), the run-level
+# state is `paused` (resumable), not `done` — verdict honesty per NFR-4.
+# Re-roll the fragments to see if any are paused; rerun parser is fragment-by-
+# fragment because the loop-level `paused_halt` variable is scoped to the
+# specific driver block.
+_any_paused=0
+if [ -d "$STATE_DIR" ]; then
+  for f in "$STATE_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    [ "$(basename "$f")" = "run.json" ] && continue
+    if grep -q '"status":"paused"' "$f" 2>/dev/null; then
+      _any_paused=1; break
+    fi
+  done
+fi
+if [ "$_any_paused" -eq 1 ]; then set_run_state paused
+else                              set_run_state done; fi
 
 echo; echo "=== Done. Report: $REPORT ==="; cat "$REPORT"

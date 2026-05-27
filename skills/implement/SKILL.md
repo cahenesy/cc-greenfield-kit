@@ -70,6 +70,22 @@ After launching, report: the PID, that it is running detached, and the log
 location. The user can watch with `tail -f docs/tdd/.implement-logs/<ts>/report.md`
 or just wait.
 
+## Watching it
+- `/implement-status` — read-only progress snapshot of the active run
+  (current TDD, stage, an estimate-labeled %, per-TDD statuses, log/PR
+  pointers). Says so plainly when no run is active.
+- Live watch — `/implement-status` hands you a one-line
+  `!bash "${CLAUDE_PLUGIN_ROOT}/scripts/status.sh" --follow` command to paste
+  in your TUI; it is a foreground, read-only view that refreshes until you
+  press Ctrl-C (the build is unaffected).
+
+Both views read one structured run-state record the runner maintains under
+`docs/tdd/.implement-logs/<ts>/state.d/` (FR-27):
+- `run.json` — run-level identity + rollup;
+- `<slug>.json` — one fragment per queued TDD, updated atomically at every
+  status / stage transition;
+- `docs/tdd/.implement-logs/latest` — symlink to the active run's `<ts>` dir.
+
 What each process does (see `${CLAUDE_PLUGIN_ROOT}/scripts/build-prompt.md`): loads the TDD + its PRD
 refs + accepted ADRs, builds failing-test-first (a `test(failing):` commit before
 each implementation), lint/typecheck enforced at edit time, updates any docs the

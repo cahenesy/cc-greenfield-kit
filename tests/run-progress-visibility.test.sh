@@ -228,7 +228,11 @@ EOF
     || bad "should show 100% when all TDDs are terminal"
 ) || true
 
-echo "[M] status.sh: --follow exits cleanly on SIGINT and never writes to state.d/ (FR-29/FR-30)"
+echo "[M] status.sh: --follow exits cleanly on a stop signal and never writes to state.d/ (FR-29/FR-30)"
+# Real Ctrl-C in the TUI sends SIGINT to the foreground status.sh and the trap
+# fires. In a non-interactive test, `bash &` inherits SIG_IGN for SIGINT (POSIX)
+# and a trap cannot un-ignore it, so we use SIGTERM here as the script-context
+# proxy — the trap covers both signals.
 ( D="$(mktemp -d)"
   mkdir -p "$D/state.d"
   cat > "$D/state.d/run.json" <<EOF
@@ -241,7 +245,9 @@ EOF
   bash "$STATUS" --logdir "$D" --follow 1 >/dev/null 2>&1 &
   pid=$!
   sleep 2
-  kill -INT "$pid" 2>/dev/null || true
+  kill -TERM "$pid" 2>/dev/null || true
+  for _ in 1 2 3; do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+  kill -KILL "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null
   post="$(ls "$D/state.d" | sort | tr '\n' ',')"
   [ "$pre" = "$post" ] && ok "--follow did not modify state.d/" \

@@ -1,0 +1,5 @@
+# Per-run /implement artifacts: logs, the run-state record (state.d/), the
+# single-run lock, the `latest` symlink. Run state, not design state — design
+# state (docs/PRD.md, docs/tdd/0*.md, docs/adr/, docs/tdd/BLOCKERS.md) stays
+# tracked.
+docs/tdd/.implement-logs/

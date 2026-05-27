@@ -148,6 +148,158 @@ else
 fi
 [ "${#TDDS[@]}" -eq 0 ] && { echo "No buildable TDDs (none merged to $INTEGRATION awaiting build)." | tee -a "$REPORT"; exit 0; }
 echo "Queue (${#TDDS[@]}):"; printf '  %s\n' "${TDDS[@]}"; echo "Report: $REPORT"; echo
+# state_init runs once helpers are declared (see below); we can't call it here
+# because bash needs the function definition first.
+
+# --- run-state record (FR-27) --------------------------------------------------
+# A per-run directory of atomic JSON fragments at $LOGDIR/state.d/:
+#   run.json       — run-level rollup + identity
+#   <slug>.json    — one per queued TDD (queue_pos, status, current stage, …)
+# Each writer owns its own file, so there is no lock and no race even under
+# --parallel (where each subshell only writes its own slug.json). The renderer
+# (scripts/status.sh) is the single consumer; it re-rollups counts at read time,
+# so run.json's counts are advisory — the per-TDD fragments are the truth.
+# Atomic write = `printf` to <file>.tmp then `mv`, so a reader sees the old or
+# the new file but never a torn one.
+
+# Escape a string for safe inclusion as a JSON string value. Free-text fields
+# (note/branch/pr_url/log) ride through this; structural fields are integers or
+# enums so they don't need it.
+json_escape() {
+  local s="${1:-}"
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  printf '%s' "$s"
+}
+
+# _write_tdd_fragment <slug> <n> <path> <qp> <status> <stage> <started> <updated>
+#                     <branch> <pr_url> <log> <note>
+# stage="" → JSON `null` literal; non-empty → quoted string (matches the TDD's
+# `stage ∈ {build, test-first, verify, verify-runtime, review, flip, null}`).
+_write_tdd_fragment() {
+  local slug="$1" n="$2" path="$3" qp="$4" status="$5" stage="$6" sta="$7" upd="$8"
+  local branch="$9" pr_url="${10}" log="${11}" note="${12}"
+  local stage_lit
+  if [ -z "$stage" ]; then stage_lit='null'
+  else stage_lit="\"$(json_escape "$stage")\""; fi
+  local f="$STATE_DIR/$slug.json" tmp="$f.tmp.$$"
+  printf '{"n":%d,"slug":"%s","path":"%s","queue_pos":%d,"status":"%s","stage":%s,"started_at":%d,"updated_at":%d,"branch":"%s","pr_url":"%s","log":"%s","note":"%s"}\n' \
+    "$n" "$(json_escape "$slug")" "$(json_escape "$path")" "$qp" \
+    "$(json_escape "$status")" "$stage_lit" \
+    "$sta" "$upd" \
+    "$(json_escape "$branch")" "$(json_escape "$pr_url")" "$(json_escape "$log")" \
+    "$(json_escape "$note")" \
+    > "$tmp"
+  mv "$tmp" "$f"
+}
+
+# Re-roll the run-level rollup from per-TDD fragments and rewrite run.json.
+# state ∈ {running, done}. Called by state_init (running) and at run end (done).
+_write_run_fragment() {
+  local state="$1" tmp="$STATE_DIR/run.json.tmp.$$"
+  local total="${#TDDS[@]}"
+  local completed=0 failed=0 blocked=0 skipped=0 st f
+  if [ -d "$STATE_DIR" ]; then
+    for f in "$STATE_DIR"/*.json; do
+      [ -f "$f" ] || continue
+      [ "$(basename "$f")" = "run.json" ] && continue
+      st="$(sed -n 's/.*"status":"\([^"]*\)".*/\1/p' "$f" | head -1)"
+      case "$st" in
+        done)    completed=$((completed+1)) ;;
+        failed)  failed=$((failed+1)) ;;
+        blocked) blocked=$((blocked+1)) ;;
+        skipped) skipped=$((skipped+1)) ;;
+      esac
+    done
+  fi
+  printf '{"schema":1,"started_at":%d,"updated_at":%d,"pid":%d,"integration_branch":"%s","mode":"%s","change":"%s","logdir":"%s","total":%d,"completed":%d,"failed":%d,"blocked":%d,"skipped":%d,"state":"%s"}\n' \
+    "$STATE_STARTED_AT" "$(date +%s)" "$$" \
+    "$(json_escape "$INTEGRATION")" "$STATE_MODE" "$(json_escape "$CHANGE")" "$(json_escape "$LOGDIR")" \
+    "$total" "$completed" "$failed" "$blocked" "$skipped" \
+    "$(json_escape "$state")" \
+    > "$tmp"
+  mv "$tmp" "$STATE_DIR/run.json"
+}
+
+# state_init — at run start: create state.d/, write a pending <slug>.json per
+# queued TDD (with its `n` and 1-based queue_pos for THIS run), write run.json
+# in state=running, and point the `latest` symlink at this run's <ts> dir. The
+# single-run lock (FR-18) means one writer for `latest`, so the brief non-atomic
+# relink window is inconsequential.
+state_init() {
+  STATE_DIR="$LOGDIR/state.d"
+  mkdir -p "$STATE_DIR"
+  STATE_STARTED_AT=$(date +%s)
+  if   [ "$PARALLEL" -eq 1 ]; then STATE_MODE="parallel"
+  elif [ "$COMBINED" -eq 1 ]; then STATE_MODE="combined"
+  else                             STATE_MODE="sequential"; fi
+  local i=0 path slug n
+  for path in "${TDDS[@]}"; do
+    i=$((i+1))
+    slug="$(basename "$path" .md)"
+    n=$((10#${slug%%-*}))
+    _write_tdd_fragment "$slug" "$n" "$path" "$i" pending "" \
+      "$STATE_STARTED_AT" "$STATE_STARTED_AT" "" "" "" ""
+  done
+  _write_run_fragment running
+  ln -sfn "$(basename "$LOGDIR")" "$MAINREPO/docs/tdd/.implement-logs/latest" 2>/dev/null || true
+}
+
+# set_run_state <state>  — rewrite run.json (refresh updated_at + rollup counts).
+set_run_state() { _write_run_fragment "$1"; }
+
+# set_tdd_state <slug> <status> <stage> [note]
+# Rewrite that TDD's fragment atomically; carry n/queue_pos/path/started_at/
+# branch/pr_url/log forward. `stage=""` writes JSON null.
+set_tdd_state() {
+  local slug="$1" status="$2" stage="$3" note="${4:-}"
+  local f="${STATE_DIR:-}/$slug.json"
+  [ -n "$STATE_DIR" ] && [ -f "$f" ] || return 0
+  local n qp path sta branch pr_url log now
+  n="$(sed -n 's/.*"n":\([0-9]*\).*/\1/p'            "$f" | head -1)"
+  qp="$(sed -n 's/.*"queue_pos":\([0-9]*\).*/\1/p'   "$f" | head -1)"
+  path="$(sed -n 's/.*"path":"\([^"]*\)".*/\1/p'     "$f" | head -1)"
+  sta="$(sed -n 's/.*"started_at":\([0-9]*\).*/\1/p' "$f" | head -1)"
+  branch="$(sed -n 's/.*"branch":"\([^"]*\)".*/\1/p' "$f" | head -1)"
+  pr_url="$(sed -n 's/.*"pr_url":"\([^"]*\)".*/\1/p' "$f" | head -1)"
+  log="$(sed -n 's/.*"log":"\([^"]*\)".*/\1/p'       "$f" | head -1)"
+  now=$(date +%s)
+  _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
+    "${sta:-$now}" "$now" "$branch" "$pr_url" "$log" "$note"
+}
+
+# set_tdd_meta <slug> [branch=<v>] [pr_url=<v>] [log=<v>] [note=<v>]
+# Update branch/pr_url/log/note while preserving status/stage. Used after PR
+# creation to record `branch`/`pr_url` against the existing fragment.
+set_tdd_meta() {
+  local slug="$1"; shift
+  local f="${STATE_DIR:-}/$slug.json"
+  [ -n "$STATE_DIR" ] && [ -f "$f" ] || return 0
+  local n qp path status stage sta branch pr_url log note kv now
+  n="$(sed -n 's/.*"n":\([0-9]*\).*/\1/p'            "$f" | head -1)"
+  qp="$(sed -n 's/.*"queue_pos":\([0-9]*\).*/\1/p'   "$f" | head -1)"
+  path="$(sed -n 's/.*"path":"\([^"]*\)".*/\1/p'     "$f" | head -1)"
+  status="$(sed -n 's/.*"status":"\([^"]*\)".*/\1/p' "$f" | head -1)"
+  if grep -q '"stage":null' "$f" 2>/dev/null; then stage=""
+  else stage="$(sed -n 's/.*"stage":"\([^"]*\)".*/\1/p' "$f" | head -1)"; fi
+  sta="$(sed -n 's/.*"started_at":\([0-9]*\).*/\1/p' "$f" | head -1)"
+  branch="$(sed -n 's/.*"branch":"\([^"]*\)".*/\1/p' "$f" | head -1)"
+  pr_url="$(sed -n 's/.*"pr_url":"\([^"]*\)".*/\1/p' "$f" | head -1)"
+  log="$(sed -n 's/.*"log":"\([^"]*\)".*/\1/p'       "$f" | head -1)"
+  note="$(sed -n 's/.*"note":"\([^"]*\)".*/\1/p'     "$f" | head -1)"
+  for kv in "$@"; do case "$kv" in
+    branch=*) branch="${kv#branch=}" ;;
+    pr_url=*) pr_url="${kv#pr_url=}" ;;
+    log=*)    log="${kv#log=}" ;;
+    note=*)   note="${kv#note=}" ;;
+  esac; done
+  now=$(date +%s)
+  _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
+    "${sta:-$now}" "$now" "$branch" "$pr_url" "$log" "$note"
+}
 
 # --- per-TDD primitives (cwd = the repo or worktree they run in) ---------------
 # record_session_pointer: `claude -p` redirects only its FINAL assistant message
@@ -264,18 +416,36 @@ install_deps() {  # <log>
 
 # gate_one: build -> classify -> test-first -> verify.sh -> runtime-verify ->
 # independent review -> flip. Echoes a one-line status; returns 0 ONLY when the
-# TDD was flipped to implemented.
+# TDD was flipped to implemented. Every transition publishes status/stage to the
+# per-TDD fragment (FR-27) so /implement-status sees the live state.
+#
+# Status enum: pending → building → verifying → reviewing → done | failed |
+# blocked | skipped. Stage enum: build / test-first / verify / verify-runtime /
+# review / flip / null. Runtime-verify BLOCKED maps to status=blocked (distinct
+# from FAIL per NFR-4) but is NOT a design blocker — only build BATCH_RESULT:
+# BLOCKED appends to BLOCKERS.md (see record_blocker).
 gate_one() {  # <tdd> <review-base-ref> <log>
-  local tdd="$1" rbase="$2" log="$3" bs rs rvs
+  local tdd="$1" rbase="$2" log="$3" bs rs rvs slug
+  slug="$(basename "$tdd" .md)"
+  set_tdd_meta "$slug" "log=$log"
+  set_tdd_state "$slug" building build
   build_one "$tdd" "$log"; bs="$(build_status "$log")"
   case "$bs" in
-    *BLOCKED*) record_blocker "$tdd" "${bs#*BLOCKED}"; echo "BLOCKED (design)${bs#*BLOCKED}"; return 1 ;;
+    *BLOCKED*) record_blocker "$tdd" "${bs#*BLOCKED}"
+               set_tdd_state "$slug" blocked "" "build BLOCKED (design):${bs#*BLOCKED}"
+               echo "BLOCKED (design)${bs#*BLOCKED}"; return 1 ;;
     *OK*) : ;;
-    *) echo "${bs:-FAIL (no BATCH_RESULT; see log)}"; return 1 ;;
+    *) set_tdd_state "$slug" failed "" "build did not return OK (${bs:-no BATCH_RESULT})"
+       echo "${bs:-FAIL (no BATCH_RESULT; see log)}"; return 1 ;;
   esac
+  set_tdd_state "$slug" verifying test-first
   if ! test_first_ok "$rbase" "$log"; then
+    set_tdd_state "$slug" failed "" "test-first gate: no failing-test-first commit"
     echo "FAIL test-first (no failing-test-first commit and no TEST_FIRST: SKIPPED; not flipped)"; return 1; fi
-  if ! run_verify "$log"; then echo "FAIL verification (tests/typecheck/lint red; not flipped)"; return 1; fi
+  set_tdd_state "$slug" verifying verify
+  if ! run_verify "$log"; then
+    set_tdd_state "$slug" failed "" "verify.sh FAIL (tests/typecheck/lint)"
+    echo "FAIL verification (tests/typecheck/lint red; not flipped)"; return 1; fi
   # Gate (c): runtime-verify — drive the BUILT artifact at its observable surface
   # and confirm the TDD's verification observations hold. Distinct from verify.sh
   # (CI's job). Verdicts kept honest per NFR-4: PASS/SKIP proceed; FAIL halts;
@@ -284,21 +454,31 @@ gate_one() {  # <tdd> <review-base-ref> <log>
   # appends to BLOCKERS.md). Missing verdict line → treat as FAIL (ambiguity is
   # never a false PASS). Toggle mirrors THROUGHLINE_REQUIRE_TEST_FIRST.
   if [ "${THROUGHLINE_REQUIRE_RUNTIME_VERIFY:-1}" = "1" ]; then
+    set_tdd_state "$slug" verifying verify-runtime
     verify_runtime_one "$tdd" "$rbase" "$log"; rvs="$(verify_runtime_status "$log")"
     case "$rvs" in
       *PASS*|*SKIP*) : ;;
-      *BLOCKED*) echo "BLOCKED runtime-verify (couldn't observe)${rvs#*BLOCKED}"; return 1 ;;
-      *FAIL*)    echo "FAIL runtime-verify${rvs#*FAIL}"; return 1 ;;
-      *) echo "FAIL runtime-verify (no VERIFY_RUNTIME line; ambiguity is never a false PASS; see log)"; return 1 ;;
+      *BLOCKED*) set_tdd_state "$slug" blocked "" "runtime-verify BLOCKED (couldn't observe)"
+                 echo "BLOCKED runtime-verify (couldn't observe)${rvs#*BLOCKED}"; return 1 ;;
+      *FAIL*)    set_tdd_state "$slug" failed "" "runtime-verify FAIL"
+                 echo "FAIL runtime-verify${rvs#*FAIL}"; return 1 ;;
+      *) set_tdd_state "$slug" failed "" "runtime-verify: no VERIFY_RUNTIME line"
+         echo "FAIL runtime-verify (no VERIFY_RUNTIME line; ambiguity is never a false PASS; see log)"; return 1 ;;
     esac
   fi
+  set_tdd_state "$slug" reviewing review
   review_one "$tdd" "$rbase" "$log"; rs="$(review_status "$log")"
   case "$rs" in
     *PASS*) : ;;
-    *BLOCK*) echo "FAIL review:${rs#*BLOCK}"; return 1 ;;
-    *) echo "FAIL review (no REVIEW_RESULT; see log)"; return 1 ;;
+    *BLOCK*) set_tdd_state "$slug" failed "" "review BLOCK"
+             echo "FAIL review:${rs#*BLOCK}"; return 1 ;;
+    *) set_tdd_state "$slug" failed "" "review: no REVIEW_RESULT line"
+       echo "FAIL review (no REVIEW_RESULT; see log)"; return 1 ;;
   esac
-  flip_status "$tdd" "$log"; echo "OK (verified + reviewed)"; return 0
+  set_tdd_state "$slug" reviewing flip
+  flip_status "$tdd" "$log"
+  set_tdd_state "$slug" done "" "OK (verified + reviewed)"
+  echo "OK (verified + reviewed)"; return 0
 }
 
 # --- resume support ------------------------------------------------------------
@@ -333,15 +513,30 @@ combined_built_branch() {  # echoes a branch where EVERY queued TDD is implement
 }
 PR_PLAN=()  # ordered, bottom-up "merge me" list for stacked sequential PRs
 
+# Initialize the per-run state record (FR-27). One fragment per queued TDD so
+# the renderer (status.sh) always sees `total` fragments — important under
+# --parallel, where a pre-skipped TDD never enters the subshell pool and would
+# otherwise leave no fragment behind. Runs here, AFTER every helper is defined.
+state_init
+
 # --- drivers -------------------------------------------------------------------
 if [ "$PARALLEL" -eq 1 ]; then
   pids=(); declare -A SKIPPED=()
   for tdd in "${TDDS[@]}"; do
     slug="$(basename "$tdd" .md)"; log="$LOGDIR/$slug.log"; wt="../$(basename "$PWD")-wt-$slug"
     built="$(built_branch "$tdd")"
-    if [ -n "$built" ]; then SKIPPED[$slug]="$built"; continue; fi
+    if [ -n "$built" ]; then
+      SKIPPED[$slug]="$built"
+      set_tdd_state "$slug" skipped "" "already built on $built; awaiting your merge"
+      set_tdd_meta  "$slug" "branch=$built"
+      continue
+    fi
     if ! git worktree add -b "feat/$slug" "$wt" "$BASE" >>"$log" 2>&1; then
-      echo "worktree failed for $slug" >>"$log"; continue; fi
+      echo "worktree failed for $slug" >>"$log"
+      set_tdd_state "$slug" failed "" "worktree create failed"
+      continue
+    fi
+    set_tdd_meta "$slug" "branch=feat/$slug"
     abslog="$log"
     ( cd "$wt" || exit 1
       install_deps "$abslog"
@@ -349,8 +544,11 @@ if [ "$PARALLEL" -eq 1 ]; then
       st="$(gate_one "$tdd" "$pre" "$abslog")"; rc=$?
       printf 'PARSTATUS::%s\n' "$st" >>"$abslog"
       if [ "$rc" -eq 0 ] && [ "$HASGH" -eq 1 ]; then
-        git push -u origin "feat/$slug" >>"$abslog" 2>&1 \
-          && gh pr create --base "$BASE" --head "feat/$slug" --fill >>"$abslog" 2>&1; fi ) &
+        if git push -u origin "feat/$slug" >>"$abslog" 2>&1; then
+          prurl="$(gh pr create --base "$BASE" --head "feat/$slug" --fill 2>>"$abslog")"
+          [ -n "$prurl" ] && set_tdd_meta "$slug" "pr_url=$prurl"
+        fi
+      fi ) &
     pids+=("$!")
   done
   [ "${#pids[@]}" -gt 0 ] && wait "${pids[@]}" 2>/dev/null
@@ -381,19 +579,34 @@ else
     cb="$(combined_built_branch)"
     if [ -n "$cb" ]; then
       echo "- combined set already built on $cb (awaiting your merge); skipped. Use --rebuild to force." >>"$REPORT"
+      for tdd in "${TDDS[@]}"; do
+        slug="$(basename "$tdd" .md)"
+        set_tdd_state "$slug" skipped "" "combined set already built on $cb; awaiting your merge"
+        set_tdd_meta  "$slug" "branch=$cb"
+      done
     else
     git checkout -b "$CHANGE" "$BASE" >>"$REPORT" 2>&1 || git checkout "$CHANGE" >>"$REPORT" 2>&1
     blocked=0
     for tdd in "${TDDS[@]}"; do slug="$(basename "$tdd" .md)"; log="$LOGDIR/$slug.log"
-      if [ "$blocked" -eq 1 ]; then echo "- $slug — BLOCKED (upstream TDD failed; not attempted)" >>"$REPORT"; continue; fi
+      if [ "$blocked" -eq 1 ]; then
+        echo "- $slug — BLOCKED (upstream TDD failed; not attempted)" >>"$REPORT"
+        set_tdd_state "$slug" blocked "" "upstream TDD failed; not attempted"
+        continue
+      fi
       pre="$(git rev-parse HEAD 2>/dev/null || echo "$BASE")"
       echo ">>> $slug"; st="$(gate_one "$tdd" "$pre" "$log")"; rc=$?
       echo "  $st"; echo "- $slug — $st (log: $log)" >>"$REPORT"
+      set_tdd_meta "$slug" "branch=$CHANGE"
       [ "$rc" -ne 0 ] && blocked=1
     done
     if [ "$blocked" -eq 0 ] && [ "$HASGH" -eq 1 ]; then
-      if git push -u origin "$CHANGE" >>"$REPORT" 2>&1 && gh pr create --base "$BASE" --head "$CHANGE" --fill >>"$REPORT" 2>&1; then
-        echo "Opened ONE combined PR: $CHANGE -> $BASE (not merged — merging is your gate)." >>"$REPORT"; fi
+      if git push -u origin "$CHANGE" >>"$REPORT" 2>&1; then
+        prurl="$(gh pr create --base "$BASE" --head "$CHANGE" --fill 2>>"$REPORT")"
+        if [ -n "$prurl" ]; then
+          echo "Opened ONE combined PR: $prurl (not merged — merging is your gate)." >>"$REPORT"
+          for tdd in "${TDDS[@]}"; do set_tdd_meta "$(basename "$tdd" .md)" "pr_url=$prurl"; done
+        fi
+      fi
     elif [ "$HASGH" -ne 1 ]; then echo "gh/remote not available: commits are on branch '$CHANGE'; open a PR manually." >>"$REPORT"; fi
     fi
 
@@ -403,13 +616,22 @@ else
     prev="$BASE"; blocked=0
     for tdd in "${TDDS[@]}"; do
       slug="$(basename "$tdd" .md)"; log="$LOGDIR/$slug.log"; branch="$CHANGE/$slug"
-      if [ "$blocked" -eq 1 ]; then echo "- $slug — BLOCKED (upstream TDD failed; not attempted)" >>"$REPORT"; continue; fi
+      if [ "$blocked" -eq 1 ]; then
+        echo "- $slug — BLOCKED (upstream TDD failed; not attempted)" >>"$REPORT"
+        set_tdd_state "$slug" blocked "" "upstream TDD failed; not attempted"
+        continue
+      fi
       built="$(built_branch "$tdd")"
       if [ -n "$built" ]; then
         echo "- $slug — already built on $built (awaiting your merge); skipped" >>"$REPORT"
+        set_tdd_state "$slug" skipped "" "already built on $built; awaiting your merge"
+        set_tdd_meta  "$slug" "branch=$built"
         prev="$built"; continue; fi   # stack later TDDs on the already-built branch
       if ! git checkout -b "$branch" "$prev" >>"$log" 2>&1; then
-        echo "- $slug — FAIL (could not branch off $prev; log: $log)" >>"$REPORT"; blocked=1; continue; fi
+        echo "- $slug — FAIL (could not branch off $prev; log: $log)" >>"$REPORT"
+        set_tdd_state "$slug" failed "" "could not branch off $prev"
+        blocked=1; continue; fi
+      set_tdd_meta "$slug" "branch=$branch"
       pre="$(git rev-parse HEAD)"
       echo ">>> $slug (off $prev)"; st="$(gate_one "$tdd" "$pre" "$log")"; rc=$?; echo "  $st"
       if [ "$rc" -eq 0 ]; then
@@ -418,6 +640,7 @@ else
           if git push -u origin "$branch" >>"$log" 2>&1; then
             prurl="$(gh pr create --base "$pbase" --head "$branch" --fill 2>>"$log")"
             if [ -n "$prurl" ]; then pr=", $prurl"; PR_PLAN+=("$prurl  (base $pbase)")
+              set_tdd_meta "$slug" "pr_url=$prurl"
             else pr=", PR create failed (see log)"; fi
           else pr=", push failed (see log)"; fi
         fi
@@ -449,4 +672,11 @@ fi
 if [ -f "${MAINREPO:-$PWD}/docs/tdd/BLOCKERS.md" ]; then
   { echo; echo "Design blockers were recorded in docs/tdd/BLOCKERS.md — run /tdd-author to revise the design, then re-run /implement."; } >>"$REPORT"
 fi
+
+# Mark the run-state record as done (FR-27) so a later status.sh on this logdir
+# sees the terminal rollup. The lock is still held; it's the trap on EXIT that
+# releases it, after which the renderer's "no active /implement run" path takes
+# over.
+set_run_state done
+
 echo; echo "=== Done. Report: $REPORT ==="; cat "$REPORT"

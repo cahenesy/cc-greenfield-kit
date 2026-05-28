@@ -540,6 +540,120 @@ EOF4
   fi
 )
 
+# --- Third review pass: pipefail-independent awk-rc guards + classifier
+# stderr capture + env-pin sanitization ---------------------------------------
+# Pass 2's MAJ-2/MAJ-3 fixes used `PIPESTATUS` AFTER a `\$(pipeline)`
+# command substitution — which collapses to a single subshell exit when
+# `pipefail` is not set. The production CLI invocations
+# `bash scripts/lib/tdd-lint.sh <tdd>` and `bash scripts/lib/plan-classifier.sh
+# <tdd>` run without pipefail, so the guards were non-functional on the
+# primary use path. The fix below captures awk's stdout to a local first,
+# checks its rc directly, and only then pipes to the trivial tail
+# (grep/sort/tr). The tests deliberately UNSET pipefail in their subshells so
+# they exercise the production CLI path rather than the test harness's
+# inherited pipefail.
+
+echo "[lint-BL1-standalone] tl_lint_traced surfaces awk crash WITHOUT pipefail (BL-1 from pass 3)"
+(
+  TMP="$(mktemp -d)"
+  cat > "$TMP/awk" <<'EOF2'
+#!/usr/bin/env bash
+exit 3
+EOF2
+  chmod +x "$TMP/awk"
+  set +o pipefail
+  export PATH="$TMP:$PATH"
+  source "$LINT"
+  err="$(tl_lint_traced "$FIX/clean.md" 2>&1 >/dev/null)"; rc=$?
+  unset -f tl_lint_structural tl_lint_placeholders tl_lint_traced tl_lint_all _tl_emit 2>/dev/null
+  rm -rf "$TMP"
+  expect_exit 2 "$rc" "tl_lint_traced rc=2 on awk crash without pipefail"
+  printf '%s\n' "$err" | grep -qi 'awk' \
+    && ok "stderr names awk failure (standalone path)" \
+    || bad "expected stderr to mention awk crash without pipefail (got: $err)"
+)
+
+echo "[cls-BL2-standalone] tl_classify_plan surfaces awk crash WITHOUT pipefail (BL-2 from pass 3)"
+(
+  TMP="$(mktemp -d)"
+  cat > "$TMP/awk" <<'EOF2'
+#!/usr/bin/env bash
+exit 3
+EOF2
+  chmod +x "$TMP/awk"
+  set +o pipefail
+  export PATH="$TMP:$PATH"
+  source "$CLS"
+  out="$(tl_classify_plan "$FIX/clean.md" 2>/dev/null)"; rc=$?
+  unset -f tl_classify_plan 2>/dev/null
+  rm -rf "$TMP"
+  if [ "$rc" -eq 0 ]; then
+    bad "tl_classify_plan rc=0 despite awk crash without pipefail (got out='$out')"
+  else
+    ok "tl_classify_plan non-zero rc on awk crash without pipefail (rc=$rc)"
+  fi
+)
+
+echo "[rt-M1stderr] verify_runtime_one captures classifier stderr to gate log (MAJ-1 from pass 3)"
+(
+  # Pre-fix: `2>/dev/null` on the classifier call discards the only
+  # observable signal that a classifier crash occurred. If BL-2's
+  # PIPESTATUS guard doesn't fire (because production has no pipefail),
+  # there is no remaining trace of the failure for triage. The fix
+  # captures classifier stderr to the gate log so the failure is
+  # observable regardless of pipefail.
+  setup_runtime
+  mkdir -p "$TMPROOT/scripts/lib"
+  cat > "$TMPROOT/scripts/lib/plan-classifier.sh" <<'EOF3'
+#!/usr/bin/env bash
+tl_classify_plan() {
+  echo "plan-classifier: SENTINEL_CLASSIFIER_STDERR_LINE_FROM_TEST" >&2
+  return 2
+}
+EOF3
+  SDIR="$TMPROOT/scripts"
+  THROUGHLINE_SOURCE_ONLY=1 source "$IMPL"
+  MODEL=opus
+  RVMTPL="$REPO/scripts/verify-runtime-prompt.md"
+  LOGF="$TMPROOT/0001-cls-stderr.log"; : > "$LOGF"
+  PATH="$TMPROOT/stub/bin:$PATH" verify_runtime_one docs/tdd/0001-mechanical.md HEAD "$LOGF" >/dev/null 2>&1
+  grep -q "SENTINEL_CLASSIFIER_STDERR_LINE_FROM_TEST" "$LOGF" \
+    && ok "classifier stderr captured to gate log" \
+    || bad "expected classifier stderr in gate log (got: $(cat "$LOGF"))"
+  cd "$REPO"; rm -rf "$TMPROOT"
+)
+
+echo "[rt-M2env] env-pinned verify_runtime_one notes bogus classifier output (MAJ-2 from pass 3)"
+(
+  # Pre-fix: the env-pinned branch has no `case` guard for unexpected
+  # classifier output. A stub that returns rc=0 with a bogus cls
+  # ("xyzzy") would propagate xyzzy into the gate log line — the
+  # unpinned branch sanitizes this to nontrivial with a note; the
+  # pinned branch did not.
+  setup_runtime
+  mkdir -p "$TMPROOT/scripts/lib"
+  cat > "$TMPROOT/scripts/lib/plan-classifier.sh" <<'EOF3'
+#!/usr/bin/env bash
+tl_classify_plan() { echo "xyzzy"; return 0; }
+EOF3
+  SDIR="$TMPROOT/scripts"
+  THROUGHLINE_SOURCE_ONLY=1 source "$IMPL"
+  MODEL=opus
+  RVMTPL="$REPO/scripts/verify-runtime-prompt.md"
+  LOGF="$TMPROOT/0001-pin-bogus.log"; : > "$LOGF"
+  THROUGHLINE_RUNTIME_VERIFY_MODEL=opus \
+    PATH="$TMPROOT/stub/bin:$PATH" \
+    verify_runtime_one docs/tdd/0001-mechanical.md HEAD "$LOGF" >/dev/null 2>&1
+  if grep -q 'plan=xyzzy' "$LOGF"; then
+    bad "env-pin path passed bogus classifier output through (got: $(cat "$LOGF"))"
+  elif grep -q 'plan=nontrivial' "$LOGF"; then
+    ok "env-pin path sanitized bogus cls to nontrivial"
+  else
+    bad "expected env-pin path to sanitize bogus cls (got: $(cat "$LOGF"))"
+  fi
+  cd "$REPO"; rm -rf "$TMPROOT"
+)
+
 PASS="$(grep -c '^ok$'   "$RESULTS" 2>/dev/null)"; PASS="${PASS:-0}"
 FAIL="$(grep -c '^fail$' "$RESULTS" 2>/dev/null)"; FAIL="${FAIL:-0}"
 rm -f "$RESULTS"

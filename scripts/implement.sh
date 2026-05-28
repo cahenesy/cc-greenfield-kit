@@ -138,8 +138,14 @@ if [ "$RESUME" -eq 1 ] && [ -L "$MAINREPO/docs/tdd/.implement-logs/latest" ]; th
   # shared CI runners) where the log dir's trust boundary may differ
   # from the script source. The check uses canonical paths so symlinks
   # within the target chain cannot escape via .. components.
-  _resolved_logdir="$(cd "$LOGDIR" 2>/dev/null && pwd -P || echo "$LOGDIR")"
-  _resolved_root="$(cd "$MAINREPO/docs/tdd/.implement-logs" 2>/dev/null && pwd -P || echo "$MAINREPO/docs/tdd/.implement-logs")"
+  # TDD 0011 / iter-9 SEC-1: hard-fail on `cd` failure. The previous fallback
+  # `echo "$LOGDIR"` let unresolved paths slip past the confinement check —
+  # a symlink target with `..` segments would compare its UNRESOLVED form
+  # against the unresolved root prefix and pass spuriously.
+  _resolved_logdir="$(cd "$LOGDIR" 2>/dev/null && pwd -P)" \
+    || { echo "FATAL: cannot canonicalize logdir '$LOGDIR' (symlink target missing or unreadable)" >&2; exit 1; }
+  _resolved_root="$(cd "$MAINREPO/docs/tdd/.implement-logs" 2>/dev/null && pwd -P)" \
+    || { echo "FATAL: cannot canonicalize log root '$MAINREPO/docs/tdd/.implement-logs'" >&2; exit 1; }
   case "$_resolved_logdir/" in
     "$_resolved_root/"*) : ;;
     *) echo "FATAL: 'latest' symlink target escapes log dir: $_resolved_logdir" >&2; exit 1 ;;
@@ -781,6 +787,14 @@ _retry_in_gate() {
   case "$backoff_base" in
     ''|*[!0-9]*) echo "warning: THROUGHLINE_GATE_BACKOFF_BASE='$backoff_base' not numeric; falling back to 30" >&2; backoff_base=30 ;;
   esac
+  # TDD 0011 / iter-9 SEC-2: cap the backoff base. Without an upper bound,
+  # `BACKOFF_BASE=86400` would produce 86400 * 4^2 = ~16-day sleeps on the
+  # third attempt, holding the single-run lock and blocking the repo for
+  # days. 3600s (1h) base is plenty for any legitimate rate-limit retry.
+  if [ "$backoff_base" -gt 3600 ] 2>/dev/null; then
+    echo "warning: THROUGHLINE_GATE_BACKOFF_BASE=$backoff_base exceeds cap of 3600s; capping (would hold the single-run lock for many hours)" >&2
+    backoff_base=3600
+  fi
   local attempt cause rc backoff
   for (( attempt=1; attempt<=max_retries; attempt++ )); do
     "$gate_fn" "$@"
@@ -796,8 +810,19 @@ _retry_in_gate() {
     # paused state. The audit record now reflects the actual upcoming
     # sleep — including the final one — for honesty.
     backoff=$(( backoff_base * (4 ** (attempt - 1)) ))
-    _append_retry "$slug" "$gate_name" "$attempt" "$backoff"
-    [ "$backoff" -gt 0 ] && sleep "$backoff"
+    # TDD 0011 / iter-9 M-1: on the FINAL attempt the sleep is wasted —
+    # no further gate call follows it. Skip it to avoid up to 480s of
+    # gratuitous wall-clock delay before writing the paused fragment.
+    # Audit the planned backoff still (so the retries[] entry matches the
+    # schedule), but use 0 in the actual sleep guard.
+    # TDD 0011 / iter-9 SF-1: surface _append_retry failures (otherwise
+    # disk-full would silently drop the retry record and break iter-6
+    # MA-1's retries-proxy guard).
+    _append_retry "$slug" "$gate_name" "$attempt" "$backoff" \
+      || echo "warning: _retry_in_gate: retry audit write failed for $slug (attempt $attempt)" >&2
+    if [ "$attempt" -lt "$max_retries" ] && [ "$backoff" -gt 0 ]; then
+      sleep "$backoff"
+    fi
     if [ "$attempt" -ge "$max_retries" ]; then
       # TDD 0011 / MA-2: propagate _enter_paused failure. If we can't
       # record paused state, return FAIL (1) instead of paused (2) so
@@ -1317,14 +1342,19 @@ gate_one() {  # <tdd> <review-base-ref> <log>
     if ! test_first_ok "$rbase" "$log"; then
       set_tdd_state "$slug" failed "" "test-first gate: no failing-test-first commit"
       echo "FAIL test-first (no failing-test-first commit and no TEST_FIRST: SKIPPED; not flipped)"; return 1; fi
-    set_tdd_state "$slug" verifying test-first "" test-first
+    # TDD 0011 / iter-9 SF-2: gate-completion writes feed FR-40's
+    # resume hint; a swallowed failure would let resume re-run completed
+    # gates. Surface failures via stderr.
+    set_tdd_state "$slug" verifying test-first "" test-first \
+      || echo "warning: gate_one: could not record test-first completion for $slug" >&2
   fi
   if ! _is_done verify; then
     set_tdd_state "$slug" verifying verify
     if ! run_verify "$log"; then
       set_tdd_state "$slug" failed "" "verify.sh FAIL (tests/typecheck/lint)"
       echo "FAIL verification (tests/typecheck/lint red; not flipped)"; return 1; fi
-    set_tdd_state "$slug" verifying verify "" verify
+    set_tdd_state "$slug" verifying verify "" verify \
+      || echo "warning: gate_one: could not record verify completion for $slug" >&2
   fi
 
   # --- Gate 3: runtime-verify (LLM-driven; retry-eligible) -----------------
@@ -1348,7 +1378,8 @@ gate_one() {  # <tdd> <review-base-ref> <log>
     fi
     rvs="$(verify_runtime_status "$log")"
     case "$rvs" in
-      *PASS*|*SKIP*) set_tdd_state "$slug" verifying verify-runtime "" verify-runtime ;;
+      *PASS*|*SKIP*) set_tdd_state "$slug" verifying verify-runtime "" verify-runtime \
+                       || echo "warning: gate_one: could not record verify-runtime completion for $slug" >&2 ;;
       *BLOCKED*) set_tdd_state "$slug" blocked "" "runtime-verify BLOCKED (couldn't observe)"
                  echo "BLOCKED runtime-verify (couldn't observe)${rvs#*BLOCKED}"; return 1 ;;
       *FAIL*)    set_tdd_state "$slug" failed "" "runtime-verify FAIL"
@@ -1375,7 +1406,8 @@ gate_one() {  # <tdd> <review-base-ref> <log>
     fi
     rs="$(review_status "$log")"
     case "$rs" in
-      *PASS*) set_tdd_state "$slug" reviewing review "" review ;;
+      *PASS*) set_tdd_state "$slug" reviewing review "" review \
+                || echo "warning: gate_one: could not record review completion for $slug" >&2 ;;
       *BLOCK*) set_tdd_state "$slug" failed "" "review BLOCK"
                echo "FAIL review:${rs#*BLOCK}"; return 1 ;;
       *) set_tdd_state "$slug" failed "" "review: no REVIEW_RESULT line"

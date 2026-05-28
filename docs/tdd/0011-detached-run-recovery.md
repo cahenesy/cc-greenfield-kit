@@ -139,13 +139,19 @@ attempt migration. (Resolves PRD open question on plugin schema skew.)
        if exit==0 OR cause==fatal: return
        backoff = BACKOFF_BASE * (4 ** (attempt-1))   # 30, 120, 480 default
        append to retries[] in fragment
-       sleep $backoff
+       if attempt < MAX_RETRIES: sleep $backoff   # iter-9 M-1: skip the
+         # final-attempt sleep — no further gate call follows it; the
+         # ~480s wait before _enter_paused would just be wasted wall time.
+         # The audit entry still records the *planned* backoff (so retries[]
+         # length matches the schedule), but the actual sleep is bypassed.
      # All retries exhausted: promote to paused (not failed)
      _enter_paused "$slug" "$cause"
      return 2   # caller treats as "paused, not flipped"
      ```
      Env knobs (PRD open question resolved): `THROUGHLINE_GATE_RETRIES`
-     (default `3`), `THROUGHLINE_GATE_BACKOFF_BASE` (default `30`s).
+     (default `3`, hard cap 10), `THROUGHLINE_GATE_BACKOFF_BASE` (default
+     `30`s, hard cap 3600s) — both capped to prevent the single-run lock
+     being held for unbounded periods on misconfiguration.
 
    - **New `_enter_paused <slug> <cause>` function.** Writes
      `status=paused`, `paused_cause=<cause>`, leaves `stage` as the

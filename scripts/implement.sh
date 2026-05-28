@@ -994,16 +994,27 @@ verify_runtime_one() {  # <tdd> <base-ref> <log>
   # Model tiering (FR-52). The env override always wins.
   vm="${THROUGHLINE_RUNTIME_VERIFY_MODEL:-}"
   classifier="${SDIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/lib/plan-classifier.sh"
+  # M3 (review pass): capture the classifier's exit code and attach a
+  # distinguishing note when it fails. The previous form silently fell
+  # through to plan=nontrivial on classifier error — the gate log line
+  # was IDENTICAL to a genuine nontrivial classification, so a triage
+  # could not tell a crashed classifier from a deliberate choice. The
+  # `(classifier failed, rc=N)` annotation preserves NFR-4 honesty.
+  local cls_rc
   if [ -z "$vm" ]; then
     if [ -f "$classifier" ]; then
       # shellcheck source=/dev/null
       . "$classifier"
-      cls="$(tl_classify_plan "$tdd" 2>/dev/null)"
-      case "$cls" in
-        mechanical) vm="sonnet" ;;
-        nontrivial) vm="$MODEL" ;;
-        *)          vm="$MODEL"; cls="nontrivial" ;;
-      esac
+      cls="$(tl_classify_plan "$tdd" 2>/dev/null)"; cls_rc=$?
+      if [ "$cls_rc" -ne 0 ] || [ -z "$cls" ]; then
+        vm="$MODEL"; cls="nontrivial"; note=" (classifier failed, rc=$cls_rc)"
+      else
+        case "$cls" in
+          mechanical) vm="sonnet" ;;
+          nontrivial) vm="$MODEL" ;;
+          *)          vm="$MODEL"; note=" (classifier returned unexpected '$cls', defaulted nontrivial)"; cls="nontrivial" ;;
+        esac
+      fi
     else
       vm="$MODEL"; cls="nontrivial"; note=" (classifier missing)"
     fi
@@ -1013,8 +1024,10 @@ verify_runtime_one() {  # <tdd> <base-ref> <log>
     if [ -f "$classifier" ]; then
       # shellcheck source=/dev/null
       . "$classifier"
-      cls="$(tl_classify_plan "$tdd" 2>/dev/null)"
-      [ -z "$cls" ] && cls="nontrivial"
+      cls="$(tl_classify_plan "$tdd" 2>/dev/null)"; cls_rc=$?
+      if [ "$cls_rc" -ne 0 ] || [ -z "$cls" ]; then
+        cls="nontrivial"; note=" (classifier failed, rc=$cls_rc)"
+      fi
     else
       cls="nontrivial"; note=" (classifier missing)"
     fi

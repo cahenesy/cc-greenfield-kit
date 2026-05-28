@@ -107,7 +107,15 @@ tl_lint_structural() {  # <tdd-path>
   # last `^## ` heading's line number + a count of non-blank, non-table-
   # separator lines seen since; if a new `^## ` arrives with count == 0 we
   # emit a finding against the PRIOR heading's line.
-  awk '
+  #
+  # M1 (review pass): capture awk's stdout into a local instead of writing to
+  # an adjacent temp file. The temp-file pattern silently dropped the
+  # finding when the input's directory was read-only (the redirect failed,
+  # `2>/dev/null` swallowed the error, [ -s ] read false → rc=0 = "clean"),
+  # violating NFR-4 verdict honesty. Command substitution survives a
+  # read-only working tree.
+  local empty_out
+  empty_out="$(awk '
     function emit(ln, hdr) {
       printf "%s:%d major section.empty: %s heading has no content before next section\n", FILE, ln, hdr
     }
@@ -135,13 +143,12 @@ tl_lint_structural() {  # <tdd-path>
     END {
       if (last_ln > 0 && count == 0) emit(last_ln, last_hdr)
     }
-  ' FILE="$f" "$f" > "$f.tdd-lint.empty.$$" 2>/dev/null
-  if [ -s "$f.tdd-lint.empty.$$" ]; then
-    cat "$f.tdd-lint.empty.$$"
+  ' FILE="$f" "$f")"
+  if [ -n "$empty_out" ]; then
+    printf '%s\n' "$empty_out"
     # Promote rc to 1 (major) but never demote a 2 (blocker).
     [ "$rc" -lt 1 ] && rc=1
   fi
-  rm -f "$f.tdd-lint.empty.$$"
   return "$rc"
 }
 
@@ -201,9 +208,19 @@ tl_lint_placeholders() {  # <tdd-path>
     }
     END { exit (found ? 1 : 0) }
   ' "$f"
-  case "$?" in
+  # M2 (review pass): map awk's exit code honestly. The previous form mapped
+  # every non-1 exit (including awk crashes, exit ≥2) to rc=0 "clean" — a
+  # silent FAIL that violates NFR-4. Capture awk's rc first (the `case`
+  # branches were resetting $? on each match), then propagate {0,1} as
+  # intended and surface any other exit as rc=2 (blocker) + stderr.
+  local awk_rc=$?
+  case "$awk_rc" in
+    0) rc=0 ;;
     1) rc=1 ;;
-    *) rc=0 ;;
+    *)
+      echo "tdd-lint: placeholders: awk failed (exit $awk_rc) on $f" >&2
+      return 2
+      ;;
   esac
   return "$rc"
 }

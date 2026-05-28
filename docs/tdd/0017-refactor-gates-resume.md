@@ -12,7 +12,7 @@ clusters that together account for the remaining bulk of `implement.sh`:
 
 - **Gate executors** — the functions that spawn `claude -p` for build /
   review / runtime-verify, parse their result sentinels, and run
-  `verify.sh`. Plus `install_deps` and the "gated wrapper" functions that
+  `ci-checks.sh`. Plus `install_deps` and the "gated wrapper" functions that
   thread retry-loop bookkeeping around each gate call.
 - **Resume orchestration** — the functions that re-enter a paused TDD's
   state and decide which gate(s) to re-run, plus `gate_one` and the
@@ -45,7 +45,7 @@ exception explicitly).
 | `review_one` | ~961 | Spawn the review `claude -p` for one TDD against a base ref. |
 | `verify_runtime_one` | ~979 | Spawn the runtime-verify `claude -p` for one TDD. |
 | `build_status` / `review_status` / `verify_runtime_status` | ~988–990 | Parse the verdict sentinels from a log file. |
-| `run_verify` | ~991 | Run `verify.sh` against the build branch. |
+| `run_ci_checks` | ~991 | Run `ci-checks.sh` against the build branch. |
 | `test_first_ok` | ~996 | Verify the `test(failing): …` commit precedes implementation. |
 | `flip_status` | ~1003 | Edit a TDD's `Status:` line to `implemented`. |
 | `record_blocker` | ~1009 | Append a BLOCKERS.md entry. |
@@ -87,7 +87,7 @@ summary emission. Spot-check estimate: ~600 lines.
 
 ### No other file changes
 
-`scripts/status.sh`, `scripts/verify.sh`, skill prompts unchanged. The
+`scripts/status.sh`, `scripts/ci-checks.sh`, skill prompts unchanged. The
 Theme C / Theme B TDDs (0018–0021) layer new behavior on top of the
 post-refactor file layout; their edits will target `scripts/lib/*.sh`
 modules directly, not `implement.sh`'s orchestration body.
@@ -103,7 +103,7 @@ appends BLOCKERS.md in the same shape; `flip_status` edits the same
 
 1. **Create `scripts/lib/gates.sh`** with the 11 functions in the order
    listed in §Components. Header: "Gate executors: build, review, runtime-
-   verify, verify.sh; result-sentinel parsers; install_deps; gated wrappers."
+   verify, ci-checks.sh; result-sentinel parsers; install_deps; gated wrappers."
 2. **Create `scripts/lib/resume.sh`** with the 6 functions in the order
    listed. Header: "Resume orchestration: re-enter paused runs, decide
    which gates to re-drive, branch resolution helpers."
@@ -156,7 +156,7 @@ behavior surface inside the refactor).
 3. **BLOCKED fixture build.** Construct a fixture whose review gate emits
    `REVIEW_RESULT: BLOCK …`. Run pre-/post-refactor; confirm the
    BLOCKERS.md entry produced is byte-identical (modulo timestamps).
-4. **`verify.sh` clean.** `bash scripts/verify.sh` passes on the refactor
+4. **`ci-checks.sh` clean.** `bash scripts/ci-checks.sh` passes on the refactor
    branch — `shellcheck` clean on `implement.sh`, `lib/gates.sh`,
    `lib/resume.sh`.
 
@@ -165,7 +165,7 @@ behavior surface inside the refactor).
 - All three fixture paths (clean, paused-then-resume, blocked) produce
   byte-identical (post-normalization) run-state fragments and REPORT/
   BLOCKERS.md outputs across pre-refactor and post-refactor runs.
-- `verify.sh` passes.
+- `ci-checks.sh` passes.
 - Final `scripts/implement.sh` size: orchestration body ≤ 600 lines
   total (including header comments) — confirmed by `wc -l`.
 

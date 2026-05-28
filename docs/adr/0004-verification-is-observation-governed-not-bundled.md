@@ -7,10 +7,10 @@ Scope: workflow / verification
 
 PRD revision `962732c` introduced verification-as-observation (FR-23–FR-26) as a
 first-class principle threaded through every phase of the pipeline. Until now
-throughline's only pre-flip behavioral check was `verify.sh` — a mechanical re-run
+throughline's only pre-flip behavioral check was `ci-checks.sh` — a mechanical re-run
 of the project's tests, typecheck, and linter. But passing tests answer "does CI go
 green", not "does the real artifact behave where a user (human or programmatic)
-actually meets it". A `test(failing):`-first commit and a green `verify.sh` can both
+actually meets it". A `test(failing):`-first commit and a green `ci-checks.sh` can both
 hold while the shipped CLI prints the wrong thing, the endpoint returns the wrong
 shape, or the library throws on the documented happy path. The PRD names this gap and
 asks throughline to *govern* verification from the requirement forward without
@@ -25,7 +25,7 @@ verification *mechanism*; it does not reverse anything in 0003.
 ## Decision
 
 Treat **verification** as confirming the real artifact behaves at its observable
-surface — distinct from tests/typechecks, which remain CI's job (`verify.sh`).
+surface — distinct from tests/typechecks, which remain CI's job (`ci-checks.sh`).
 
 - **Carry it from the PRD forward.** Each PRD requirement states an observable
   acceptance criterion (an observation of the artifact's surface, not "a test
@@ -57,7 +57,7 @@ Rejected alternatives:
 ## Consequences
 
 - `/implement` gains a **fourth** independent gate — runtime verification — between
-  `verify.sh` and the independent review; a TDD flips to `implemented` only on a
+  `ci-checks.sh` and the independent review; a TDD flips to `implemented` only on a
   verification `PASS` (or a justified `SKIP`), never on passing tests alone.
 - The `design-reviewer` gate BLOCKs a TDD with a missing or non-actionable
   verification plan; `/prd-author` enforces an observable acceptance criterion for

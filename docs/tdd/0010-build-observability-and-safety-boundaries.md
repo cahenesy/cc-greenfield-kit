@@ -174,7 +174,7 @@ and `docs/adr/INDEX.md` listing.
    inspect the per-TDD log (`docs/tdd/.implement-logs/<ts>/<slug>.log`):
    `grep -c '^THROUGHLINE_SESSION:' <log>` is exactly `1`, and the path it
    names is an existing readable file.
-3. After the FULL `/implement` run (build + verify.sh + runtime-verify +
+3. After the FULL `/implement` run (build + ci-checks.sh + runtime-verify +
    review), `grep -c '^THROUGHLINE_SESSION:' <log>` is exactly `3` (one per
    `claude -p` gate: build, runtime-verify, review). Each path resolves.
 4. `grep -q '^Build-phase boundaries' scripts/build-prompt.md` exits 0;

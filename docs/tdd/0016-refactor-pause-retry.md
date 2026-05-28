@@ -59,7 +59,7 @@ modules. Cohesion wins over alphabetical clustering.
 
 ### No other file changes
 
-`scripts/status.sh`, `scripts/verify.sh`, skill prompts unchanged. Slice 3
+`scripts/status.sh`, `scripts/ci-checks.sh`, skill prompts unchanged. Slice 3
 (TDD 0017) handles the gates + resume clusters.
 
 ## Data & state
@@ -129,7 +129,7 @@ the *behavior under recoverable failure* must be preserved.
 - The paused state's `cause` field, the retry array's entry count and
   per-entry cause/gate/attempt fields, and the eventual resolution
   (gate retry success → `done`) all match across runs.
-- `bash scripts/verify.sh` passes on the refactor branch.
+- `bash scripts/ci-checks.sh` passes on the refactor branch.
 
 ## Requirement traceability
 

@@ -44,7 +44,7 @@ and commit it, not to drive the running artifact):
   If you must kill child processes you yourself spawned, track each child's PID
   from `$!` and kill ONLY those PIDs.
 - DO NOT create runtime-driving fixtures in `/tmp` or anywhere outside the
-  repo. The failing-test-first gate inspects commits; `verify.sh` runs the
+  repo. The failing-test-first gate inspects commits; `ci-checks.sh` runs the
   committed test suite + typecheck + lint. Both look at what is IN the repo.
   Out-of-repo `/tmp/...` fixtures and ad-hoc scratch dirs are gate 3's surface,
   not gate 1's — and they leave debris the runner cannot clean up.
@@ -58,7 +58,7 @@ design-level problems, not ordinary bugs you can fix.
 
 Close:
 - Run the FULL test suite, typecheck, and linter; confirm green. An INDEPENDENT
-  gate will re-run these (verify.sh — tests + typecheck + lint, with clippy at
+  gate will re-run these (ci-checks.sh — tests + typecheck + lint, with clippy at
   `-D warnings`), then a SEPARATE runtime-verification gate will DRIVE the
   built artifact at its observable surface (per the TDD's `## Verification
   plan`) — so make sure what you committed is RUNNABLE (entry points work,

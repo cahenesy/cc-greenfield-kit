@@ -26,7 +26,7 @@ the mechanical gates.
 - `scripts/review-prompt.md` — independent review prompt; fans out to
   `pr-review-toolkit:code-reviewer` + `silent-failure-hunter` +
   `throughline:security-reviewer`; ends `REVIEW_RESULT: PASS|BLOCK`.
-- `scripts/verify.sh` — mechanical gate: tests + typecheck + linter, package-manager
+- `scripts/ci-checks.sh` — mechanical gate: tests + typecheck + linter, package-manager
   aware, auto-detected or via `VERIFY_*` env.
 - `agents/security-reviewer.md` — kept in-gate (ADR 0003).
 
@@ -41,7 +41,7 @@ the mechanical gates.
 Detect integration branch → select TDDs (`draft|ready` on integration, not
 `implemented`) → acquire single-run lock → per TDD in a dedicated worktree: install
 deps → build (`claude -p`, build-prompt) → gate 1 test-first (a `test(failing):`
-commit precedes impl, read from git) → gate 2 `verify.sh` → gate 3 review (`claude -p`
+commit precedes impl, read from git) → gate 2 `ci-checks.sh` → gate 3 review (`claude -p`
 on a different model, review-prompt) requiring `REVIEW_RESULT: PASS` → flip to
 `implemented` + open PR. Halt-on-failure (sequential) marks downstream `BLOCKED`.
 Emit report + bottom-up merge plan. Release lock on exit.
@@ -62,9 +62,9 @@ Emit report + bottom-up merge plan. Release lock on exit.
 ## Requirement traceability
 - FR-13 → merge-triggered selection (integration branch, not-implemented).
 - FR-14 → detached `claude -p` + dedicated worktrees; sequential/`--combined`/`--parallel`.
-- FR-15 → three gates: test-first (superpowers TDD), `verify.sh`, independent review.
+- FR-15 → three gates: test-first (superpowers TDD), `ci-checks.sh`, independent review.
   Verification aspects of FR-15 (the fourth gate, runtime-verify, and the
-  reframing of `verify.sh` as the mechanical CI gate rather than verification)
+  reframing of `ci-checks.sh` as the mechanical CI gate rather than verification)
   now covered by TDD 0007.
 - FR-16 → never merges; sequential halt marks downstream `BLOCKED`.
 - FR-17 → BLOCKERS.md feedback loop.

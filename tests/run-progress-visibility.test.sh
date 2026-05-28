@@ -42,8 +42,8 @@ setup() {
 #!/usr/bin/env bash
 exit "\$(cat "$STUBDIR/verify_rc" 2>/dev/null || echo 0)"
 EOF
-  export VERIFY_TEST_CMD="bash $STUBDIR/verify_test.sh"
-  export VERIFY_TYPECHECK_CMD=""
+  export CI_CHECKS_TEST_CMD="bash $STUBDIR/verify_test.sh"
+  export CI_CHECKS_TYPECHECK_CMD=""
 
   cat > "$STUBDIR/bin/claude" <<'EOF'
 #!/usr/bin/env bash
@@ -134,7 +134,7 @@ echo "[E] happy run: run.json state=done; per-TDD fragment status=done (FR-27 tr
 
 echo "[F] failure transition: TDD that fails verify ends status=failed (FR-27)"
 ( setup "$ROOT/f" 1
-  printf '1\n' > "$STUBDIR/verify_rc"        # tests red -> verify gate fails
+  printf '1\n' > "$STUBDIR/verify_rc"        # tests red -> ci-checks gate fails
   bash "$IMPL" --change ci >/dev/null 2>&1
   SD="$(statedir)"
   grep -qE '"status":[[:space:]]*"failed"' "$SD/0001-alpha.json" \

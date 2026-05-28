@@ -81,9 +81,9 @@ The non-paused interactive flow continues at "Prepare" below.
    from `${CLAUDE_PLUGIN_ROOT}/scripts/` — they are NOT copied into the repo, so
    every project always uses the current version (no vendored drift). The runner
    finds `build-prompt.md`, `review-prompt.md`, `verify-runtime-prompt.md`, and
-   `verify.sh` next to itself. `verify.sh` auto-detects the test/typecheck/lint
-   commands; for an unusual setup, export `VERIFY_TEST_CMD` /
-   `VERIFY_TYPECHECK_CMD` / `VERIFY_LINT_CMD` before launching.
+   `ci-checks.sh` next to itself. `ci-checks.sh` auto-detects the test/typecheck/lint
+   commands; for an unusual setup, export `CI_CHECKS_TEST_CMD` /
+   `CI_CHECKS_TYPECHECK_CMD` / `CI_CHECKS_LINT_CMD` before launching.
 
 ## Run (launch it yourself, detached)
 Implementation runs in separate `claude -p` processes, never in this session —
@@ -149,7 +149,7 @@ to `implemented`, the runner enforces four independent gates:
   `test(failing): ...` commit BEFORE the implementation (unless it emits
   `TEST_FIRST: SKIPPED` for a genuine no-new-behavior change). Mechanical, read
   straight from git history.
-- **verify.sh** — re-runs the test suite + typecheck + project linter
+- **ci-checks.sh** — re-runs the test suite + typecheck + project linter
   mechanically. This is **CI's job** (running tests, not verification — see ADR
   0004); the model's self-report doesn't count.
 - **runtime-verify** — a SEPARATE `claude -p` process that drives the BUILT

@@ -13,7 +13,7 @@ delegated, not bundled. PRD requirements carry observable acceptance criteria
 (FR-24); each TDD carries a verification plan (FR-23); the design-critique gate
 blocks a missing/non-actionable plan (FR-10); `/implement` adds a fourth gate that
 DRIVES the built artifact and confirms the plan's observations hold (FR-25), keeping
-`verify.sh` as the separate, mechanical "CI's job" gate. throughline ships no
+`ci-checks.sh` as the separate, mechanical "CI's job" gate. throughline ships no
 harness — the runtime gate delegates the *how* to the project +
 `superpowers:verification-before-completion` / the `/verify` skill (FR-26).
 
@@ -64,7 +64,7 @@ prd-author, tdd-author, design-reviewer, and the runtime gate):
        independent of the build's own self-report regardless of model), cwd = the build
        worktree (deps already installed by `install_deps`).
      - `verify_runtime_status() { grep -aoE 'VERIFY_RUNTIME: (PASS|FAIL.*|BLOCKED.*|SKIP.*)' "$1" 2>/dev/null | tail -1; }`
-     - In `gate_one`, insert gate (c) BETWEEN `run_verify` (gate b) and `review_one`
+     - In `gate_one`, insert gate (c) BETWEEN `run_ci_checks` (gate b) and `review_one`
        (gate d), behind `THROUGHLINE_REQUIRE_RUNTIME_VERIFY` (default 1, mirroring
        `THROUGHLINE_REQUIRE_TEST_FIRST`): run `verify_runtime_one`; classify
        `verify_runtime_status` — `PASS`/`SKIP` → proceed to review; `FAIL` →
@@ -72,7 +72,7 @@ prd-author, tdd-author, design-reviewer, and the runtime gate):
        `echo "BLOCKED runtime-verify (couldn't observe)…"; return 1`; no verdict line →
        treat as FAIL. A not-PASS/SKIP result leaves the TDD un-flipped.
      - Update the file-header comment "three independent gates" → four, and the
-       gate-list (1 test-first, 2 verify.sh, 3 runtime-verify, 4 review).
+       gate-list (1 test-first, 2 ci-checks.sh, 3 runtime-verify, 4 review).
 5. Docs sync (in the same commits): `skills/implement/SKILL.md` — three → four gates,
    the runtime gate, the `SKIP`/`BLOCKED` distinction, and `THROUGHLINE_REQUIRE_RUNTIME_VERIFY`;
    `scripts/build-prompt.md` — note that a separate runtime-verification gate will
@@ -86,13 +86,13 @@ prd-author, tdd-author, design-reviewer, and the runtime gate):
 - No persistent new state. The runtime gate's evidence is its `claude -p` transcript
   appended to the per-TDD log (`$LOGDIR/<slug>.log`); the verdict is parsed from it,
   exactly as build (`BATCH_RESULT:`) and review (`REVIEW_RESULT:`) already are.
-- `scripts/verify.sh` is UNCHANGED — it remains the deterministic, mechanical CI gate
+- `scripts/ci-checks.sh` is UNCHANGED — it remains the deterministic, mechanical CI gate
   (tests + typecheck + lint). The runtime gate is a separate `claude -p` process.
 
 ## Sequencing / implementation plan
 Edit the three authoring/governance surfaces (tdd-author template + step; prd-author
 criterion + self-review; design-reviewer check) → add `scripts/verify-runtime-prompt.md`
-→ wire `verify_runtime_one`/`verify_runtime_status` into `gate_one` between verify.sh
+→ wire `verify_runtime_one`/`verify_runtime_status` into `gate_one` between ci-checks.sh
 and review, behind `THROUGHLINE_REQUIRE_RUNTIME_VERIFY` → update the implement skill,
 build-prompt, and the header comment → add the four back-pointers. Dogfood: this TDD
 itself carries the `## Verification plan` below.
@@ -111,8 +111,8 @@ itself carries the `## Verification plan` below.
   and marks downstream TDDs BLOCKED.
 - throughline itself has no unit-test framework, so its OWN verification is
   artifact-appropriate shell observation (run the runner against a fixture, inspect
-  the log) — see the plan below. `verify.sh` for plugin TDDs needs `VERIFY_ALLOW_EMPTY=1`
-  or a shell-based `VERIFY_TEST_CMD`; that is a pre-existing condition, not introduced
+  the log) — see the plan below. `ci-checks.sh` for plugin TDDs needs `CI_CHECKS_ALLOW_EMPTY=1`
+  or a shell-based `CI_CHECKS_TEST_CMD`; that is a pre-existing condition, not introduced
   by this design.
 
 ## Verification plan
@@ -124,7 +124,7 @@ itself carries the `## Verification plan` below.
 - **Observation points:**
   1. In a scratch git repo with a trivial fixture TDD whose plan has a runnable
      observation, run `bash scripts/implement.sh <fixture> --combined`
-     (`VERIFY_ALLOW_EMPTY=1` for verify.sh); `grep -n 'VERIFY_RUNTIME: PASS'` the
+     (`CI_CHECKS_ALLOW_EMPTY=1` for ci-checks.sh); `grep -n 'VERIFY_RUNTIME: PASS'` the
      per-TDD log and confirm it appears AFTER `verify: gate PASS` and BEFORE
      `REVIEW_RESULT:`.
   2. Re-run with `THROUGHLINE_REQUIRE_RUNTIME_VERIFY=0`; confirm the flip no longer
@@ -133,7 +133,7 @@ itself carries the `## Verification plan` below.
      `## Verification plan` section deleted; observe `DESIGN_REVIEW: BLOCK`.
   4. `grep -n '## Verification plan' skills/tdd-author/SKILL.md` and
      `grep -n 'acceptance criterion' skills/prd-author/SKILL.md` each return a match.
-- **Expected observations (PASS):** the gate ordering test-first → verify.sh →
+- **Expected observations (PASS):** the gate ordering test-first → ci-checks.sh →
   verify-runtime → review holds (the `VERIFY_RUNTIME:` line sits between the verify
   and review lines); the env toggle removes the requirement; the design-reviewer
   blocks a planless TDD; both skill texts contain the new content.
@@ -153,7 +153,7 @@ itself carries the `## Verification plan` below.
 - FR-5 (delta) → prd-author self-review gains "missing-acceptance-criterion".
 - FR-8 (delta) → the TDD template gains the verification plan.
 - FR-10 (delta) → design-reviewer BLOCKs a missing/non-actionable plan.
-- FR-15 (delta) → three → four gates (runtime verify added; verify.sh reframed as the
+- FR-15 (delta) → three → four gates (runtime verify added; ci-checks.sh reframed as the
   mechanical CI gate, not verification).
 - FR-22 (delta) → the verification *mechanism* is added to the delegation set
   (`superpowers:verification-before-completion` / `/verify`) via the FR-26 boundary
@@ -170,7 +170,7 @@ contradict FR-26 / ADR 0002–0003 (delegate the mechanism), add lock-in, and co
 generalize across CLI/HTTP/library/DOM artifacts. The verification *mechanism*
 delegates to `superpowers:verification-before-completion` / the `/verify` skill, an
 already-declared dependency surface. Rejected alternative **"fold runtime verification
-into `verify.sh`"**: `verify.sh` is deterministic and model-free (tests + typecheck +
+into `ci-checks.sh`"**: `ci-checks.sh` is deterministic and model-free (tests + typecheck +
 lint); driving an arbitrary artifact and judging observations is agentic — conflating
 them would re-erase the CI-vs-verification separation FR-15/FR-25 exist to draw.
 

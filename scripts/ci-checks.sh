@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# verify.sh — the mechanical verification gate.
+# ci-checks.sh — the mechanical CI-checks gate.
 #
 # Runs the project's test suite, typecheck, and linter; exits 0 ONLY if all pass.
 # implement.sh calls this independently AFTER a build process claims success, so
@@ -7,14 +7,14 @@
 # than on the model's own `BATCH_RESULT: OK`. "Done" is verified, not asserted.
 #
 # Detection is best-effort per language. Override it explicitly for any project:
-#   VERIFY_TEST_CMD="<cmd>"        run this for tests (empty string = skip tests)
-#   VERIFY_TYPECHECK_CMD="<cmd>"   run this for the typecheck (empty = skip)
-#   VERIFY_LINT_CMD="<cmd>"        run this for the linter (empty = skip lint)
+#   CI_CHECKS_TEST_CMD="<cmd>"        run this for tests (empty string = skip tests)
+#   CI_CHECKS_TYPECHECK_CMD="<cmd>"   run this for the typecheck (empty = skip)
+#   CI_CHECKS_LINT_CMD="<cmd>"        run this for the linter (empty = skip lint)
 # A command set to a non-empty string is run via `sh -c`. Setting a var to the
 # empty string explicitly skips that stage.
 #
 # If nothing can be detected AND no override is given, this FAILS by default —
-# an unverifiable build is not a verified build. Set VERIFY_ALLOW_EMPTY=1 to
+# an unverifiable build is not a verified build. Set CI_CHECKS_ALLOW_EMPTY=1 to
 # treat "nothing to run" as a pass (e.g. a docs-only repo).
 set -uo pipefail
 
@@ -22,9 +22,9 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 # Overrides win. Use a sentinel so an explicitly-empty override means "skip",
 # distinct from "unset, please detect".
-TEST_CMD="${VERIFY_TEST_CMD-__detect__}"
-TYPE_CMD="${VERIFY_TYPECHECK_CMD-__detect__}"
-LINT_CMD="${VERIFY_LINT_CMD-__detect__}"
+TEST_CMD="${CI_CHECKS_TEST_CMD-__detect__}"
+TYPE_CMD="${CI_CHECKS_TYPECHECK_CMD-__detect__}"
+LINT_CMD="${CI_CHECKS_LINT_CMD-__detect__}"
 
 if [ "$TEST_CMD" = "__detect__" ] || [ "$TYPE_CMD" = "__detect__" ] || [ "$LINT_CMD" = "__detect__" ]; then
   det_test=""; det_type=""; det_lint=""
@@ -100,22 +100,22 @@ fi
 # "Verifiable" means behavioral: tests or typecheck. Lint is additive strictness,
 # not a substitute — a lint-only repo is still treated as unverifiable.
 if [ -z "$TEST_CMD" ] && [ -z "$TYPE_CMD" ]; then
-  if [ "${VERIFY_ALLOW_EMPTY:-0}" = "1" ]; then
-    echo "verify: nothing to run; VERIFY_ALLOW_EMPTY=1 -> PASS"; exit 0
+  if [ "${CI_CHECKS_ALLOW_EMPTY:-0}" = "1" ]; then
+    echo "ci-checks: nothing to run; CI_CHECKS_ALLOW_EMPTY=1 -> PASS"; exit 0
   fi
-  echo "verify: no test/typecheck command detected and no override set." >&2
-  echo "verify: refusing to certify an unverifiable build. Set VERIFY_TEST_CMD" >&2
-  echo "verify: (and/or VERIFY_TYPECHECK_CMD), or VERIFY_ALLOW_EMPTY=1 to bypass." >&2
+  echo "ci-checks: no test/typecheck command detected and no override set." >&2
+  echo "ci-checks: refusing to certify an unverifiable build. Set CI_CHECKS_TEST_CMD" >&2
+  echo "ci-checks: (and/or CI_CHECKS_TYPECHECK_CMD), or CI_CHECKS_ALLOW_EMPTY=1 to bypass." >&2
   exit 1
 fi
 
 fail=0
 for stage in "test:$TEST_CMD" "typecheck:$TYPE_CMD" "lint:$LINT_CMD"; do
   label="${stage%%:*}"; cmd="${stage#*:}"
-  if [ -z "$cmd" ]; then echo "verify: $label — skipped (no command)"; continue; fi
-  echo "verify: $label -> $cmd"
-  if sh -c "$cmd"; then echo "verify: $label PASS"; else echo "verify: $label FAIL"; fail=1; fi
+  if [ -z "$cmd" ]; then echo "ci-checks: $label — skipped (no command)"; continue; fi
+  echo "ci-checks: $label -> $cmd"
+  if sh -c "$cmd"; then echo "ci-checks: $label PASS"; else echo "ci-checks: $label FAIL"; fail=1; fi
 done
 
-[ "$fail" -eq 0 ] && echo "verify: gate PASS" || echo "verify: gate FAIL"
+[ "$fail" -eq 0 ] && echo "ci-checks: gate PASS" || echo "ci-checks: gate FAIL"
 exit "$fail"

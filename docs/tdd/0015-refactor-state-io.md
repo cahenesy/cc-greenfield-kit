@@ -70,7 +70,7 @@ appears earlier in the file.
 
 ### No other file changes
 
-Nothing else moves in this slice. `scripts/status.sh`, `scripts/verify.sh`,
+Nothing else moves in this slice. `scripts/status.sh`, `scripts/ci-checks.sh`,
 and the skill prompts are untouched. Subsequent slices (TDDs 0016, 0017)
 handle the pause-retry and gates+resume clusters.
 
@@ -117,7 +117,7 @@ the same shape as before; this is a pure code-organization refactor.
 - **`shellcheck` runs over `lib/*.sh` independently.** A `# shellcheck
   source=lib/state.sh` directive at the source site links the analyzer's
   view so cross-file references resolve. The new module gets its own
-  `shellcheck` clean pass under `verify.sh`.
+  `shellcheck` clean pass under `ci-checks.sh`.
 
 ## Verification plan
 
@@ -148,7 +148,7 @@ the same shape as before; this is a pure code-organization refactor.
   byte-identical pre- and post-refactor.
 - The verdict line in REPORT (`BATCH_RESULT: OK` for the fixture)
   appears in both runs.
-- `bash scripts/verify.sh` passes on the refactor branch (`shellcheck`
+- `bash scripts/ci-checks.sh` passes on the refactor branch (`shellcheck`
   clean on both `implement.sh` and `lib/state.sh`).
 
 **SKIP not applicable** — this refactor has an observable surface

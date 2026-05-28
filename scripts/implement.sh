@@ -34,7 +34,7 @@
 #                        dedicated `test(failing): ...` commit BEFORE the impl,
 #                        unless it emits `TEST_FIRST: SKIPPED` for a no-new-
 #                        behavior change.
-#   2. verify.sh       — re-runs tests + typecheck + lint mechanically (this is
+#   2. ci-checks.sh       — re-runs tests + typecheck + lint mechanically (this is
 #                        CI's job — running tests, not verification).
 #   3. runtime-verify  — a SEPARATE `claude -p` process drives the BUILT artifact
 #                        to the TDD's verification observation points and confirms
@@ -115,10 +115,10 @@ fi
 command -v claude >/dev/null 2>&1 || { echo "claude CLI not found on PATH"; exit 1; }
 HASGH=0; command -v gh >/dev/null 2>&1 && HASGH=1
 SDIR="$(cd "$(dirname "$0")" && pwd)"
-TMPL="$SDIR/build-prompt.md"; RTMPL="$SDIR/review-prompt.md"; VERIFY="$SDIR/verify.sh"
+TMPL="$SDIR/build-prompt.md"; RTMPL="$SDIR/review-prompt.md"; CI_CHECKS="$SDIR/ci-checks.sh"
 RVMTPL="$SDIR/verify-runtime-prompt.md"
-for f in "$TMPL" "$RTMPL" "$RVMTPL" "$VERIFY"; do [ -f "$f" ] || { echo "missing $f"; exit 1; }; done
-[ -x "$VERIFY" ] || chmod +x "$VERIFY" 2>/dev/null || true
+for f in "$TMPL" "$RTMPL" "$RVMTPL" "$CI_CHECKS"; do [ -f "$f" ] || { echo "missing $f"; exit 1; }; done
+[ -x "$CI_CHECKS" ] || chmod +x "$CI_CHECKS" 2>/dev/null || true
 MAINREPO="$PWD"
 
 # Logs/report live in the MAIN repo (absolute), so they survive the throwaway
@@ -988,7 +988,7 @@ verify_runtime_one() {  # <tdd> <base-ref> <log>
 build_status()          { grep -aoE 'BATCH_RESULT: (OK|FAIL.*|BLOCKED.*)' "$1" 2>/dev/null | tail -1; }
 review_status()         { grep -aoE 'REVIEW_RESULT: (PASS|BLOCK.*)' "$1" 2>/dev/null | tail -1; }
 verify_runtime_status() { grep -aoE 'VERIFY_RUNTIME: (PASS|FAIL.*|BLOCKED.*|SKIP.*)' "$1" 2>/dev/null | tail -1; }
-run_verify()    { bash "$VERIFY" >>"$1" 2>&1; }
+run_ci_checks()    { bash "$CI_CHECKS" >>"$1" 2>&1; }
 # test-first gate: mechanical, git-history only. The build must show failing-test-
 # first discipline — a dedicated `test(failing): ...` commit BEFORE the impl —
 # unless it emits `TEST_FIRST: SKIPPED` for a genuine no-new-behavior change. The
@@ -1015,7 +1015,7 @@ record_blocker() {  # <tdd> <reason>  -> append to the main repo's blocker ledge
 
 # install_deps: a fresh worktree does NOT carry gitignored, uncommitted state —
 # most importantly node_modules — so a JS/TS build can't run its tests/typecheck
-# and verify.sh fails until deps are installed. Install them once per worktree,
+# and ci-checks.sh fails until deps are installed. Install them once per worktree,
 # before building, using the project's package manager. No-ops for non-JS repos
 # (and other ecosystems that fetch on build, e.g. cargo/go); skip with
 # THROUGHLINE_SKIP_DEPS=1. cwd must be the worktree.
@@ -1038,7 +1038,7 @@ install_deps() {  # <log>
     || echo "install_deps: dependency install failed; build may fail at verify" >>"$log"
 }
 
-# gate_one: build -> classify -> test-first -> verify.sh -> runtime-verify ->
+# gate_one: build -> classify -> test-first -> ci-checks.sh -> runtime-verify ->
 # independent review -> flip. Echoes a one-line status; returns 0 ONLY when the
 # TDD was flipped to implemented. Every transition publishes status/stage to the
 # per-TDD fragment (FR-27) so /implement-status sees the live state.
@@ -1286,7 +1286,7 @@ _resume_from() {
   export "$var"
 }
 
-# gate_one — build → test-first → verify.sh → runtime-verify → review → flip.
+# gate_one — build → test-first → ci-checks.sh → runtime-verify → review → flip.
 # Return codes:
 #   0 — TDD flipped to implemented
 #   1 — gate failed (existing FAIL/BLOCKED semantics)
@@ -1356,7 +1356,7 @@ gate_one() {  # <tdd> <review-base-ref> <log>
     esac
   fi
 
-  # --- Gate 2: test-first + verify.sh (mechanical; never retried) ----------
+  # --- Gate 2: test-first + ci-checks.sh (mechanical; never retried) ----------
   if ! _is_done test-first; then
     set_tdd_state "$slug" verifying test-first
     if ! test_first_ok "$rbase" "$log"; then
@@ -1370,8 +1370,8 @@ gate_one() {  # <tdd> <review-base-ref> <log>
   fi
   if ! _is_done verify; then
     set_tdd_state "$slug" verifying verify
-    if ! run_verify "$log"; then
-      _terminal_state "$slug" failed "" "verify.sh FAIL (tests/typecheck/lint)"
+    if ! run_ci_checks "$log"; then
+      _terminal_state "$slug" failed "" "ci-checks.sh FAIL (tests/typecheck/lint)"
       echo "FAIL verification (tests/typecheck/lint red; not flipped)"; return 1; fi
     set_tdd_state "$slug" verifying verify "" verify \
       || echo "warning: gate_one: could not record verify completion for $slug" >&2

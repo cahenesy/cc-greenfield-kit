@@ -23,7 +23,7 @@ Overlap assessment:
 - `code-reviewer` agent ↔ pr-review-toolkit `code-reviewer` (richer: silent-failure-hunter, type-design-analyzer, pr-test-analyzer) — **full overlap**; used by the `/implement` review gate.
 - `security-reviewer` agent ↔ built-in `/security-review` — **full coverage** (pr-review-toolkit has no security agent; `security-guidance` is a reminder hook, not a reviewer).
 - `build-prompt.md`'s failing-test-first discipline ↔ `superpowers:test-driven-development` — **overlap** (restated rather than referenced).
-- **No overlap → KEEP:** the PRD/TDD/ADR skills, `design-reviewer` (reviews design docs, not code), `implement.sh` (unattended, mechanically-gated orchestration — no official equivalent), `verify.sh` (mechanical tests+typecheck+lint gate), the `format-and-lint` hook.
+- **No overlap → KEEP:** the PRD/TDD/ADR skills, `design-reviewer` (reviews design docs, not code), `implement.sh` (unattended, mechanically-gated orchestration — no official equivalent), `ci-checks.sh` (mechanical tests+typecheck+lint gate), the `format-and-lint` hook.
 
 ## Decision
 

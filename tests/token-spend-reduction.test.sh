@@ -714,8 +714,9 @@ Run the CLI, observe exit code 0.
 |---|---|
 | FR-1 | something |
 
-FR-2 is illustrated below as code-fence prose, NOT as a real
-traceability row:
+The second requirement is illustrated below as code-fence prose,
+NOT as a real traceability row — the lint must treat the row
+inside the fence as a non-entry:
 ```
 | FR-2 | (this is just example syntax, not a real entry) |
 ```

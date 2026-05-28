@@ -279,11 +279,19 @@ tl_lint_traced() {  # <tdd-path>
   # output to the trivial tail (grep/sort) — which never reaches the
   # primary failure modes for this lint (grep rc=1 = no matches = valid
   # empty result; sort is read-only on a small stdin buffer).
+  # MAJ-1 (review pass 5): fence-aware body extraction. The previous form
+  # let an FR ID inside a ``` fenced code block in the traceability section
+  # silently satisfy the trace — a real untraced requirement hidden behind
+  # a code-block illustration. This is the same convention `has_rows`
+  # (BL-2/MAJ-4 fix), `section.empty`, and `tl_lint_placeholders` already
+  # use; tl_lint_traced now matches.
   local awk_out awk_rc
   awk_out="$(awk '
-    /^## Requirement traceability$/ { in_sec=1; next }
-    /^## / { in_sec=0; next }
-    in_sec { print }
+    BEGIN { in_sec=0; in_fence=0 }
+    /^[[:space:]]*```/ { in_fence = !in_fence; next }
+    !in_fence && /^## Requirement traceability$/ { in_sec=1; next }
+    !in_fence && /^## / { in_sec=0; next }
+    in_sec && !in_fence { print }
   ' "$f")"
   awk_rc=$?
   if [ "$awk_rc" -ne 0 ]; then

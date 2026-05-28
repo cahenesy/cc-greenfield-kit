@@ -218,6 +218,44 @@ None. FR-36..38 are internally consistent and consistent with all `accepted`
 ADRs. ADR 0005 (proposed here) extends the "govern, not bundle" pattern of
 ADR 0004 to gate scope and complements rather than supersedes it.
 
+## Touched files
+
+- `tests/build-observability.test.sh` (new) — six-case test suite per
+  Components §4
+- `tests/fixtures/build-observability/` (new, small fixture files) — the
+  pre-canned JSONLs the test cases load
+- `scripts/implement.sh` (modified, header comment only) — one-line
+  mention of TDD 0010 in the file-header "four independent gates"
+  enumeration per Sequencing §5
+
+Note: the design-record artifacts the TDD also produces
+(`docs/adr/0005-gate-scope-enforced-by-prompt-not-sandbox.md` and the
+`docs/adr/INDEX.md` row update) ride in this TDD's design PR and are
+already on disk before `/implement` runs; they are NOT touched-files for
+the *build* phase. The three already-landed prompt-side artifacts
+(`scripts/implement.sh::record_session_pointer`, the build-prompt and
+verify-runtime-prompt boundaries) are unchanged per Sequencing §4.
+
+Total: 3 files touched (or 8 if each fixture file is counted
+individually; the fixtures are small pre-canned JSONLs under
+`tests/fixtures/build-observability/`).
+
+## Expected diff size
+
+- `tests/build-observability.test.sh` — ~120 lines (new; six test
+  cases, each its own subshell, TAP-ish output)
+- `tests/fixtures/build-observability/` — ~40 lines total across ~5
+  small JSONL fixtures (`(exception: pre-canned test fixtures; each
+  individual file is < 15 lines and the directory's total stays small)`)
+- `scripts/implement.sh` — ~3 lines added (the file-header comment
+  pointer mentioned in Sequencing §5)
+
+Total expected diff: ~165 lines across ~7 files (counting fixtures
+individually). All per-file under the 300-line default
+`THROUGHLINE_TDD_MAX_FILE_DIFF` bound; the touched-file count is at
+the 8-file default soft cap when fixtures are counted individually,
+within the cap when the fixtures directory is counted as one entry.
+
 ## Decisions to promote (ADR candidates)
 **ADR 0005 — "Gate scope enforced by prompt + downstream detection, not
 sandboxing"** (proposed `accepted`).

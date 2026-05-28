@@ -323,6 +323,42 @@ edits are limited to `.gitignore` and the marker file itself, which are
 explicitly in-scope per FR-32 and FR-34; this does not violate NFR-1 (no
 auto-merges — the hook never touches git refs).
 
+## Touched files
+
+- `scripts/lib/repo-id.sh` (new) — `tl_repo_id` / `tl_local_marker_path` helper
+- `scripts/lib/markers.sh` (new) — `tl_repo_marker_*` / `tl_local_marker_*` read/write helpers
+- `scripts/lib/gitignore.sh` (new) — `tl_gitignore_add_line` helper
+- `skills/bootstrap-project/SKILL.md` (modified) — two new steps + re-run contract
+- `hooks/throughline-session-reconcile.sh` (new) — `SessionStart` hook script
+- `.claude-plugin/releases.json` (new) — append-only release-metadata manifest
+- `hooks/hooks.json` (modified) — register the new hook alongside existing entries
+
+Total: 7 files touched.
+
+## Expected diff size
+
+- `scripts/lib/repo-id.sh` — ~35 lines (new)
+- `scripts/lib/markers.sh` — ~80 lines (new; four read/write functions + JSON escaping)
+- `scripts/lib/gitignore.sh` — ~25 lines (new)
+- `skills/bootstrap-project/SKILL.md` — ~60 lines added (two new prompted steps + re-run contract)
+- `hooks/throughline-session-reconcile.sh` — ~80 lines (new; seven-step flow)
+- `.claude-plugin/releases.json` — ~10 lines (new)
+- `hooks/hooks.json` — ~6 lines added (one new SessionStart entry)
+
+Total expected diff: ~295 lines across 7 files. All per-file under the
+300-line default `THROUGHLINE_TDD_MAX_FILE_DIFF` bound; no exceptions
+needed.
+
+## Scope override
+
+This TDD's doc body sits 6 lines over the 350-line default
+`THROUGHLINE_TDD_MAX_LINES` cap established by TDD 0014. The pre-backfill
+body was 330 lines (well under cap); the Theme A backfill (`## Touched
+files` + `## Expected diff size` sections, required for every TDD going
+forward) added the deciding ~26 lines. Trimming substantive content to
+fit a 6-line overshoot would harm specificity. The override is recorded
+per FR-53's escape clause.
+
 ## Decisions to promote (ADR candidates)
 None from this TDD. The two-marker model and the no-Claude-in-hook design are
 in-scope of FR-31..35 themselves; both are best documented as PRD requirements

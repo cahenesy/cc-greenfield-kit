@@ -505,6 +505,64 @@ note" at the top of this TDD is retained as a historical pointer.
 No entries in `docs/tdd/BLOCKERS.md` to resolve (the file does not
 exist).
 
+## Touched files
+
+- `scripts/lib/tdd-lint.sh` (new) — four lint functions
+  (`tl_lint_structural`, `tl_lint_placeholders`, `tl_lint_traced`,
+  `tl_lint_all`) sharing one exit-code contract, per Components §1
+- `agents/design-reviewer.md` (modified) — "Pre-check already ran"
+  preamble paragraph per Components §2
+- `skills/tdd-author/SKILL.md` (modified) — additions to steps 7a
+  and 7b per Components §3
+- `scripts/lib/plan-classifier.sh` (new) — `tl_classify_plan` heuristic
+  per Components §4
+- `scripts/implement.sh` (modified) — `verify_runtime_one` model-tiering
+  wiring per Components §5; header-comment four-gates description per
+  Components §7
+- `scripts/verify-runtime-prompt.md` (modified) — one-sentence prompt
+  update per Components §6
+- `skills/implement/SKILL.md` (modified) — one bullet in Notes per
+  Components §8
+
+Total: 7 files touched.
+
+## Expected diff size
+
+- `scripts/lib/tdd-lint.sh` — ~210 lines (new; three lints + aggregate
+  + shared `PRECHECK_FAIL` emitter) (exception: legitimately-wide new
+  file delivering the FR-51 mechanical pre-pass; the three lints can't
+  meaningfully split without duplicating their shared exit-code
+  contract and finding-emission format)
+- `agents/design-reviewer.md` — ~25 lines added (one preamble paragraph)
+- `skills/tdd-author/SKILL.md` — ~25 lines added (two short step
+  additions)
+- `scripts/lib/plan-classifier.sh` — ~60 lines (new; one classifier
+  function + keyword arrays)
+- `scripts/implement.sh` — ~20 lines changed (verify_runtime_one
+  rewrite + header comment update)
+- `scripts/verify-runtime-prompt.md` — ~5 lines changed (one-sentence
+  replacement)
+- `skills/implement/SKILL.md` — ~3 lines added (one Notes bullet)
+
+Total expected diff: ~348 lines across 7 files. One per-file exception
+declared for `scripts/lib/tdd-lint.sh`.
+
+## Scope override
+
+This TDD's doc body is over the 350-line default
+`THROUGHLINE_TDD_MAX_LINES` cap established by TDD 0014. Justification:
+this TDD was authored before TDD 0014 (the bounds didn't exist when
+this TDD was written). Its substance is two independent reductions
+(FR-51 mechanical pre-pass; FR-52 runtime-verify model tiering) sharing
+the same `scripts/lib/`-based shell-helper substrate; both reductions
+together produced one set of changes to the same skill (tdd-author for
+FR-51) and runner (implement.sh for FR-52). Splitting into two TDDs
+would either duplicate the helper-file pattern description or force
+two TDDs to edit overlapping files (`scripts/implement.sh`). The
+override is recorded retroactively per FR-53's escape clause
+(legitimately-wide design; two sibling reductions with shared
+substrate).
+
 ## Decisions to promote (ADR candidates)
 
 **None.**

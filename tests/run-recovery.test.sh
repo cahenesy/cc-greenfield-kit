@@ -264,7 +264,7 @@ echo "[4.a] _resume_from populates RESUME_GATES_DONE_<slug> from gates_completed
   printf '%s' "$done_list" | grep -q 'test-first' \
     && ok "test-first gate carried forward" || bad "test-first should be in done list (got: '$done_list')"
   printf '%s' "$done_list" | grep -q 'verify' \
-    && ok "verify gate carried forward" || bad "verify should be in done list (got: '$done_list')"
+    && ok "ci-checks gate carried forward" || bad "ci-checks should be in done list (got: '$done_list')"
   printf '%s' "$done_list" | grep -q 'verify-runtime' \
     && bad "verify-runtime must NOT be marked done (it was in-flight at pause)" \
     || ok "verify-runtime correctly NOT marked done (was in-flight)"

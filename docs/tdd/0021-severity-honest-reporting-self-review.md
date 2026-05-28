@@ -324,7 +324,7 @@ section, alongside the existing red-then-green guidance:
 > failing test will fail the pre-commit hook, which will reject the
 > commit — blocking the failing-test-first discipline this build
 > prompt requires. The escape: use `git commit --no-verify` for the
-> `test(failing):` commit specifically. The runner's `verify.sh`
+> `test(failing):` commit specifically. The runner's `ci-checks.sh`
 > gate (gate 2) re-runs lint + tests + typecheck on the build branch
 > before flipping `implemented`, and the runtime-verify gate (gate
 > 3) drives the BUILT artifact — so bypassing the local hook for
@@ -533,7 +533,7 @@ concern.
     failing test for the build to satisfy. Expect: the build's
     `test(failing):` commit uses `git commit --no-verify` per §5b(b);
     the commit lands; the subsequent green-test commit goes through
-    the hook normally; `verify.sh` (gate 2) and runtime-verify
+    the hook normally; `ci-checks.sh` (gate 2) and runtime-verify
     (gate 3) re-run the full suite against the build branch and
     confirm correctness; final `BATCH_RESULT: OK`.
 

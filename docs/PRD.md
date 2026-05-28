@@ -169,7 +169,7 @@ plugin updates, and consumer repos do not accumulate plugin-generated noise.
 - **FR-15 Four independent gates.** A TDD flips to `implemented` only after (a)
   failing-test-first discipline — a `test(failing):` commit precedes the
   implementation, following `superpowers:test-driven-development`; (b) a mechanical
-  `verify.sh` re-run of tests + typecheck + linter (this is CI's job — running tests,
+  `ci-checks.sh` re-run of tests + typecheck + linter (this is CI's job — running tests,
   not verification); (c) runtime verification — the real artifact is driven to where
   the change is observable and the TDD's verification observations hold (see FR-25);
   and (d) an independent review in a separate process on a different model
@@ -211,7 +211,7 @@ from the PRD forward. throughline owns the *governance* of verification; the
   Acceptance: every requirement added at or after this update states an observable
   acceptance criterion (this update's FR-23–FR-30 included).
 - **FR-25 Runtime-verification gate.** `/implement` runs a verification gate distinct
-  from `verify.sh`: it drives the built artifact to where the change is observable and
+  from `ci-checks.sh`: it drives the built artifact to where the change is observable and
   confirms the TDD's verification observations hold, capturing the evidence. A TDD
   flips to `implemented` only if verification is PASS — passing tests alone is
   insufficient. A change with genuinely no observable surface (e.g. an internal
@@ -317,7 +317,7 @@ think about).
   history is the source of truth for the build gate's output (so the resumed
   later gates run against the same on-disk state the interrupted run left, not
   against untrusted in-flight worktree edits). — Acceptance: a TDD
-  interrupted after gate 2 (verify.sh) and before gate 3 (runtime-verify),
+  interrupted after gate 2 (ci-checks.sh) and before gate 3 (runtime-verify),
   when resumed, produces no new gate-1 or gate-2 output in the per-TDD log
   between the resume timestamp and the runtime-verify output; the resumed
   TDD's build branch HEAD contains the same gate-1 commits as before the
@@ -702,7 +702,7 @@ of progress; not asked to drive between findings and convergence."
 - Owning **generic engineering mechanics** (TDD execution, code review, worktrees, the
   Explore agent) — delegated to superpowers / pr-review-toolkit / built-ins.
 - **Auto-merging** PRs or otherwise removing the human gate.
-- Replacing **CI**; `verify.sh` is a pre-flip gate, not a CI system.
+- Replacing **CI**; `ci-checks.sh` is a pre-flip gate, not a CI system.
 - **Bite-sized task-plan documents**; TDDs are designs, not step-by-step build scripts
   (the step-level discipline lives in `/implement`).
 - First-class support for **non-git / no-remote** workflows beyond a basic "skip git"
@@ -840,7 +840,7 @@ of progress; not asked to drive between findings and convergence."
 - **Verify.sh / runtime-verify gate participation in the rework loop (FR-61,
   FR-62).** The continuous-review loop and the bounded-rework loop are
   defined here in terms of the review gate's findings. Whether the rework
-  loop also re-runs `verify.sh` and the runtime-verify gate after each
+  loop also re-runs `ci-checks.sh` and the runtime-verify gate after each
   rework commit (cheaper to re-run; could compound cost) versus only after
   rework converges (riskier; later failures cost a full unwind) is a design
   decision deferred to `/tdd-author`.

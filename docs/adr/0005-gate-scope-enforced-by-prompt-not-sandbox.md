@@ -5,7 +5,7 @@ Scope: workflow / runner-safety / gate-architecture
 
 ## Context
 
-`/implement`'s four gates (build, verify.sh, runtime-verify, review) each have a
+`/implement`'s four gates (build, ci-checks.sh, runtime-verify, review) each have a
 distinct scope. The build phase writes code and commits; runtime-verify drives
 the built artifact at its observable surface (ADR 0004); the review phase judges
 the diff. The PR #24 post-mortem of the TDD 0008 build failure surfaced an

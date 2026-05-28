@@ -351,9 +351,9 @@ Alternatives considered:
 
 ## PRD conflicts surfaced (and resolution)
 
-The PRD defers "verify.sh / runtime-verify gate participation in the
+The PRD defers "ci-checks.sh / runtime-verify gate participation in the
 rework loop" to this TDD. This TDD scopes the rework loop to the review
-gate (gate d) only. `verify.sh` failures are not findings in the FR-58
+gate (gate d) only. `ci-checks.sh` failures are not findings in the FR-58
 sense and do not trigger FR-61; runtime-verify (gate v) failures continue
 to halt the TDD under existing semantics. A future TDD can extend the
 rework loop to runtime-verify if cost telemetry from this TDD's

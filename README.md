@@ -23,7 +23,7 @@ loses:
 | Plain Claude session | throughline |
 |---|---|
 | Design lives in transient chat; "why does this code exist?" decays with the session. | PRD + TDDs + ADRs are the persistent design-of-record. Every commit traces to an approved requirement, an approved design, and the architectural decisions it respects. |
-| "Done" is the model's say-so — it ran the tests and they passed. | Nothing flips to `implemented` until **four independent gates** pass, each in its own process: failing-test-first (read from git history, not narrative), `verify.sh` (the project's CI commands), runtime verification (drive the built artifact and observe), and an independent cross-model review. |
+| "Done" is the model's say-so — it ran the tests and they passed. | Nothing flips to `implemented` until **four independent gates** pass, each in its own process: failing-test-first (read from git history, not narrative), `ci-checks.sh` (the project's CI commands), runtime verification (drive the built artifact and observe), and an independent cross-model review. |
 | The author reviews itself — same context, same blind spots, polite agreement. | The review gate runs in a separate `claude -p` on a **different model**, fanning out to specialized subagents (code review, silent-failure-hunter, security review). Different opinions, not an echo chamber. |
 | Verification means "the tests passed." | Verification means **driving the real artifact** to where a user meets it (CLI output, HTTP response, log line, DOM, file write) and confirming the TDD's named observations hold. Tests-green is necessary, never sufficient. |
 | Scope creeps. A "small fix" turns into a 540-line PR with 11 manual review-fix iterations. | Every TDD declares its **expected diff size + touched-file set** at design time. The design-critique gate refuses over-ambitious designs before any build runs. throughline's own scripts comply with the same bounds it enforces on yours. |
@@ -153,7 +153,7 @@ throughline/
 │   │   └── plan-classifier.sh   # mechanical / nontrivial verification-plan heuristic (model tiering)
 │   ├── build-prompt.md          # build discipline; delegates to superpowers:test-driven-development
 │   ├── review-prompt.md         # review gate: pr-review-toolkit + security-reviewer, separate process/model
-│   ├── verify.sh                # mechanical gate: tests + typecheck + lint (CI's job)
+│   ├── ci-checks.sh                # mechanical gate: tests + typecheck + lint (CI's job)
 │   ├── verify-runtime-prompt.md # runtime-verification gate: drive + observe the real artifact
 │   └── status.sh                # renders run progress (snapshot + --follow watch)
 ├── tests/
@@ -196,7 +196,7 @@ process:
 1. **Failing-test-first** — a `test(failing):` commit must precede the
    implementation (mechanical, read straight from git history; the build follows
    `superpowers:test-driven-development`).
-2. **`verify.sh`** — mechanically re-runs the project's tests + typecheck +
+2. **`ci-checks.sh`** — mechanically re-runs the project's tests + typecheck +
    linter (this is CI's job — running tests, not verification).
    Package-manager-aware (pnpm/yarn/bun/npm) and prefers your declared `test` /
    `typecheck` / `lint` scripts; clippy runs at `-D warnings`.
@@ -507,7 +507,7 @@ If you want to run the eval suites locally before relying on the gates:
 
 ```
 chmod +x hooks/format-and-lint.sh hooks/post-update-reconcile.sh \
-         scripts/implement.sh scripts/verify.sh scripts/status.sh
+         scripts/implement.sh scripts/ci-checks.sh scripts/status.sh
 bash tests/implement-gate.test.sh
 bash tests/run-recovery.test.sh
 bash tests/token-spend-reduction.test.sh

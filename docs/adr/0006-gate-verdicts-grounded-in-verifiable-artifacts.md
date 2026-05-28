@@ -5,7 +5,7 @@ Scope: workflow / gate-architecture / verification-integrity
 
 ## Context
 
-The four-gate system (build, verify.sh, runtime-verify, review) issues verdicts
+The four-gate system (build, ci-checks.sh, runtime-verify, review) issues verdicts
 that determine whether a TDD is `implemented`, whether a build halts, whether
 rework runs, and whether downstream TDDs in a sequential run proceed. The
 diagnosis of TDD 0011 (PR #36) surfaced a mode where these verdicts drifted

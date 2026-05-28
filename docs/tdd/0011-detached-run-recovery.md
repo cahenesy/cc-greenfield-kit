@@ -24,7 +24,7 @@ concerns on top:
    never to a false `paused`.
 
 2. **Gate-level resume.** A `paused` TDD records exactly which of the four
-   gates (build / verify.sh / runtime-verify / review) completed. On resume,
+   gates (build / ci-checks.sh / runtime-verify / review) completed. On resume,
    gates that completed are not re-run; the build branch's committed history
    is the source of truth for the build gate's output, so later gates re-run
    against the same on-disk state, not against untrusted in-flight worktree
@@ -163,7 +163,7 @@ attempt migration. (Resolves PRD open question on plugin schema skew.)
 2. **`gate_one` (modified).** Three changes:
 
    - Wrap each `claude -p` call (build, runtime-verify, review) in
-     `_retry_in_gate`. The mechanical `verify.sh` gate (no LLM, no
+     `_retry_in_gate`. The mechanical `ci-checks.sh` gate (no LLM, no
      network) is NOT wrapped — its failures are CI failures, not
      transient.
 
@@ -305,7 +305,7 @@ attempt migration. (Resolves PRD open question on plugin schema skew.)
 4. **`gate_one` modifications + `_resume_from`.** Land with the test
    that interrupts a run mid-`verify-runtime`, re-invokes with
    `--resume`, and asserts the per-TDD log between resume timestamp
-   and the runtime-verify output contains NO new build or verify.sh
+   and the runtime-verify output contains NO new build or ci-checks.sh
    output (FR-40 acceptance verbatim).
 5. **`status.sh` renderer extensions + `--check-paused`.** Land with
    the test that runs `--check-paused` against a state.d/ with one
@@ -405,7 +405,7 @@ flip in the TDD file; the `/implement` skill's interactive prompt text.
 2. **Gate-level resume (FR-40).** From the paused state above, choose
    Resume. Observe: the per-TDD log between the resume timestamp and the
    runtime-verify verdict contains no new build (`BATCH_RESULT:`) or
-   verify.sh (`verify: gate`) output; `git log` on the build branch shows
+   ci-checks.sh (`verify: gate`) output; `git log` on the build branch shows
    the same gate-1 commits as before the interruption, with the
    runtime-verify and review gates' downstream commits (the
    `Status: implemented` flip) appearing only after resume.

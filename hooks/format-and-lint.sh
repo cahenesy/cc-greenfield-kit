@@ -14,7 +14,7 @@
 # The whole-project linters (clippy, golangci-lint) are expensive, so they are
 # DEBOUNCED: at most one run per THROUGHLINE_LINT_DEBOUNCE seconds (default 30)
 # per repo. Per-file linters (eslint, ruff) are cheap and always run. The build
-# runner's verify.sh + review gates are the real backstop, so a debounced skip
+# runner's ci-checks.sh + review gates are the real backstop, so a debounced skip
 # never lets a defect through unchecked.
 set -uo pipefail
 

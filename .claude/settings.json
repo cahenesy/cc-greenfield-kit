@@ -1,7 +1,7 @@
 {
   "env": {
-    "VERIFY_TEST_CMD": "bash tests/implement-gate.test.sh",
-    "VERIFY_TYPECHECK_CMD": "",
-    "VERIFY_LINT_CMD": ""
+    "CI_CHECKS_TEST_CMD": "bash tests/implement-gate.test.sh",
+    "CI_CHECKS_TYPECHECK_CMD": "",
+    "CI_CHECKS_LINT_CMD": ""
   }
 }

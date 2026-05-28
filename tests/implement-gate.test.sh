@@ -3,7 +3,7 @@
 #
 # The kit's core quality claim is that a build cannot mark itself "done": the
 # ready->implemented flip is gated on failing-test-first discipline, an INDEPENDENT
-# mechanical verify (tests+typecheck+lint), an INDEPENDENT runtime-verify gate
+# mechanical ci-checks (tests+typecheck+lint), an INDEPENDENT runtime-verify gate
 # that drives the built artifact at its observable surface (per the TDD's
 # `## Verification plan`), and an INDEPENDENT review process — and a failure
 # halts the dependent stack. This eval proves those four gates actually fire,
@@ -22,7 +22,7 @@ has()  { grep -q "$2" "$1" 2>/dev/null && ok "$3" || bad "$3 (expected /$2/ in $
 hasnt(){ grep -q "$2" "$1" 2>/dev/null && bad "$3 (unexpected /$2/ in $1)" || ok "$3"; }
 
 # Build a fresh project: <dir> <ntdds> [status]. Installs a stub `claude` and a
-# controllable verify command on PATH/env; returns with PWD inside <dir>. TDDs are
+# controllable ci-checks command on PATH/env; returns with PWD inside <dir>. TDDs are
 # committed on the init branch (= the integration branch) at <status> (default
 # ready; pass draft to exercise the merge-as-trigger default path).
 setup() {
@@ -41,13 +41,13 @@ setup() {
 
   export STUBDIR="$dir/.stub"
   printf '0\n' > "$STUBDIR/verify_rc"          # default: tests pass
-  # controllable verify command (read by scripts/verify.sh via VERIFY_TEST_CMD)
+  # controllable ci-checks command (read by scripts/ci-checks.sh via CI_CHECKS_TEST_CMD)
   cat > "$STUBDIR/verify_test.sh" <<EOF
 #!/usr/bin/env bash
 exit "\$(cat "$STUBDIR/verify_rc" 2>/dev/null || echo 0)"
 EOF
-  export VERIFY_TEST_CMD="bash $STUBDIR/verify_test.sh"
-  export VERIFY_TYPECHECK_CMD=""               # explicitly skip typecheck
+  export CI_CHECKS_TEST_CMD="bash $STUBDIR/verify_test.sh"
+  export CI_CHECKS_TYPECHECK_CMD=""               # explicitly skip typecheck
 
   # stub `claude`: simulates a build (commits a file), a runtime-verification, or a
   # review, emitting the control line for the TDD's slug (defaults: build OK,
@@ -96,7 +96,7 @@ echo "[A] happy path: build OK + verify pass + review PASS -> implemented"
   has "$R" "OK (verified + reviewed)" "report shows verified+reviewed OK"
 ) || true
 
-echo "[B] verify gate: tests red -> NOT implemented"
+echo "[B] ci-checks gate: tests red -> NOT implemented"
 ( setup "$ROOT/b" 1
   printf '1\n' > "$STUBDIR/verify_rc"          # tests fail
   bash "$IMPL" --change ci >/dev/null 2>&1
@@ -177,7 +177,7 @@ EOF
 
 echo "[I] lint gate: linter red -> NOT implemented (verify covers lint, not just tests/typecheck)"
 ( setup "$ROOT/i" 1
-  export VERIFY_LINT_CMD=false                  # linter fails (tests still pass)
+  export CI_CHECKS_LINT_CMD=false                  # linter fails (tests still pass)
   bash "$IMPL" --change ci >/dev/null 2>&1
   R="$(report)"
   [ "$(status_on docs/tdd/0001-alpha.md ci/0001-alpha)" = ready ] && ok "TDD left ready (lint blocked flip)" || bad "TDD must stay ready when lint fails (got '$(status_on docs/tdd/0001-alpha.md ci/0001-alpha)')"
@@ -232,21 +232,21 @@ echo "[M] merge-guard: a TDD absent from the integration branch is NOT built (PR
   has "$R" "No buildable TDDs" "report says nothing is buildable until merged"
 ) || true
 
-echo "[N] runtime-verify gate: PASS by default -> implemented; verdict lands between verify and review"
+echo "[N] runtime-verify gate: PASS by default -> implemented; verdict lands between ci-checks and review"
 ( setup "$ROOT/n" 1
   bash "$IMPL" --change ci >/dev/null 2>&1
   R="$(report)"
   L="docs/tdd/.implement-logs/$(ls -t docs/tdd/.implement-logs 2>/dev/null | head -1)/0001-alpha.log"
   [ "$(status_on docs/tdd/0001-alpha.md ci/0001-alpha)" = implemented ] && ok "TDD flipped to implemented after runtime-verify PASS" || bad "runtime PASS should still flip the TDD (got '$(status_on docs/tdd/0001-alpha.md ci/0001-alpha)')"
   has "$L" "VERIFY_RUNTIME: PASS" "log carries the VERIFY_RUNTIME verdict line"
-  # ordering: VERIFY_RUNTIME must appear AFTER 'verify: gate PASS' and BEFORE 'REVIEW_RESULT:'
-  vsh="$(grep -n 'verify: gate PASS'   "$L" 2>/dev/null | tail -1 | cut -d: -f1)"
+  # ordering: VERIFY_RUNTIME must appear AFTER 'ci-checks: gate PASS' and BEFORE 'REVIEW_RESULT:'
+  vsh="$(grep -n 'ci-checks: gate PASS'   "$L" 2>/dev/null | tail -1 | cut -d: -f1)"
   vrt="$(grep -n 'VERIFY_RUNTIME: PASS' "$L" 2>/dev/null | tail -1 | cut -d: -f1)"
   rvw="$(grep -n 'REVIEW_RESULT: PASS'  "$L" 2>/dev/null | tail -1 | cut -d: -f1)"
   if [ -n "$vsh" ] && [ -n "$vrt" ] && [ -n "$rvw" ] && [ "$vsh" -lt "$vrt" ] && [ "$vrt" -lt "$rvw" ]; then
-    ok "gate ordering: verify.sh -> runtime-verify -> review"
+    ok "gate ordering: ci-checks.sh -> runtime-verify -> review"
   else
-    bad "gate ordering wrong (verify.sh @${vsh:-?} runtime-verify @${vrt:-?} review @${rvw:-?})"
+    bad "gate ordering wrong (ci-checks.sh @${vsh:-?} runtime-verify @${vrt:-?} review @${rvw:-?})"
   fi
 ) || true
 
@@ -303,7 +303,7 @@ rm -f "$RESULTS"
 echo "=== gate eval: $PASS passed, $FAIL failed ==="
 
 # Run the run-progress-visibility eval (TDD 0008 / FR-27..FR-30) as part of the
-# same suite — VERIFY_TEST_CMD points at this file only, and the progress-record
+# same suite — CI_CHECKS_TEST_CMD points at this file only, and the progress-record
 # + status-renderer evals are runner-adjacent quality gates that belong here.
 RPV="$(dirname "$0")/run-progress-visibility.test.sh"
 RPV_FAIL=0

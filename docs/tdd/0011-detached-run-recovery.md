@@ -139,13 +139,19 @@ attempt migration. (Resolves PRD open question on plugin schema skew.)
        if exit==0 OR cause==fatal: return
        backoff = BACKOFF_BASE * (4 ** (attempt-1))   # 30, 120, 480 default
        append to retries[] in fragment
-       sleep $backoff
+       if attempt < MAX_RETRIES: sleep $backoff   # iter-9 M-1: skip the
+         # final-attempt sleep — no further gate call follows it; the
+         # ~480s wait before _enter_paused would just be wasted wall time.
+         # The audit entry still records the *planned* backoff (so retries[]
+         # length matches the schedule), but the actual sleep is bypassed.
      # All retries exhausted: promote to paused (not failed)
      _enter_paused "$slug" "$cause"
      return 2   # caller treats as "paused, not flipped"
      ```
      Env knobs (PRD open question resolved): `THROUGHLINE_GATE_RETRIES`
-     (default `3`), `THROUGHLINE_GATE_BACKOFF_BASE` (default `30`s).
+     (default `3`, hard cap 10), `THROUGHLINE_GATE_BACKOFF_BASE` (default
+     `30`s, hard cap 3600s) — both capped to prevent the single-run lock
+     being held for unbounded periods on misconfiguration.
 
    - **New `_enter_paused <slug> <cause>` function.** Writes
      `status=paused`, `paused_cause=<cause>`, leaves `stage` as the
@@ -365,6 +371,19 @@ validated.
   (`paused_cause: resume-blocked-branch-divergence`); the human
   decides whether to fresh-start or investigate. (Adding this field
   to the additive list — see Components above.)
+- **New TDDs merged to integration between pause and resume.** Resume
+  freezes the queue at its pause-time snapshot: `state_init`'s resume
+  branch diffs the current buildable set against the existing
+  `state.d/` fragments and *removes* any newly-detected TDDs from the
+  in-memory queue, naming each one in the run report
+  (`Skipping <slug>: newly-buildable, not in paused queue`). The user
+  invokes `/implement` again *after* the resume completes to build
+  them via the fresh-run path. `gate_one` carries a belt-and-suspenders
+  guard: a slug whose state fragment is missing is refused. Rationale:
+  resume's "pick up where you left off" contract stays clean; silently
+  growing the queue mid-run would change scope without consent (NFR-4
+  honesty). The fresh-run path is the right tool for queue growth — two
+  commands, two semantics.
 
 ## Verification plan
 

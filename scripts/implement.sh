@@ -145,6 +145,14 @@ if [ "$RESUME" -eq 1 ] && [ -L "$MAINREPO/docs/tdd/.implement-logs/latest" ]; th
     *) echo "FATAL: 'latest' symlink target escapes log dir: $_resolved_logdir" >&2; exit 1 ;;
   esac
   [ -d "$LOGDIR" ] || { echo "FATAL: --resume target '$LOGDIR' does not exist" >&2; exit 1; }
+elif [ "$RESUME" -eq 1 ]; then
+  # TDD 0011 / MAJOR-7: --resume with no `latest` symlink would otherwise
+  # silently fall back to a fresh LOGDIR while RESUME=1 stays set. In
+  # parallel mode that lets the driver attach to unrelated `feat/<slug>`
+  # branches from prior runs. Fail loudly instead.
+  echo "FATAL: --resume requested but no prior run found (docs/tdd/.implement-logs/latest missing)." >&2
+  echo "       If the prior run dir was deleted, re-run without --resume." >&2
+  exit 1
 else
   LOGDIR="$MAINREPO/docs/tdd/.implement-logs/$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$LOGDIR"
@@ -361,6 +369,18 @@ state_init() {
       fi
     done
     TDDS=("${_kept[@]}")
+    # TDD 0011 / MAJOR-8: if EVERY TDD in the new buildable set is a
+    # newcomer (so _kept is empty), there is nothing to resume — the
+    # drivers would no-op silently and leave the run in `paused` with
+    # `total=0`. Emit a clear message and exit so the user knows the
+    # next concrete step.
+    if [ "${#TDDS[@]}" -eq 0 ]; then
+      echo "No TDDs to resume: every queued buildable TDD is newly-added since the pause. Run /implement (without --resume) to build them." | tee -a "$REPORT"
+      _write_run_fragment running
+      _write_run_fragment done
+      ln -sfn "$(basename "$LOGDIR")" "$MAINREPO/docs/tdd/.implement-logs/latest" 2>/dev/null || true
+      exit 0
+    fi
     _write_run_fragment running   # flip back to running for the resumed work
     ln -sfn "$(basename "$LOGDIR")" "$MAINREPO/docs/tdd/.implement-logs/latest" 2>/dev/null || true
     return 0
@@ -841,7 +861,15 @@ _resume_gates_var() {
 _update_paused_cause() {
   local slug="$1" new_cause="$2"
   local f="${STATE_DIR:-}/$slug.json"
-  [ -n "$STATE_DIR" ] && [ -f "$f" ] || return 0
+  # TDD 0011 / MAJOR-6: fail loudly on missing fragment instead of silent
+  # return 0. _update_paused_cause is called only from _resume_from's
+  # refuse-to-resume paths where the fragment MUST exist — silently
+  # swallowing the absence would let the refusal vanish and the driver
+  # fall through to a silent rebuild (mirrors the _enter_paused MA-2 fix).
+  if [ -z "${STATE_DIR:-}" ] || [ ! -f "$f" ]; then
+    echo "error: _update_paused_cause cannot record cause for $slug: state fragment missing ($f)" >&2
+    return 1
+  fi
   local n qp path status stage sta branch pr_url log_f note
   local gates_csv retries_json branch_head
   n="$(sed -n 's/.*"n":\([0-9]*\).*/\1/p'            "$f" | head -1)"
@@ -886,6 +914,10 @@ _resume_from() {
   fragment_status="$(sed -n 's/.*"status":"\([^"]*\)".*/\1/p' "$f" | head -1)"
   [ "$fragment_status" = "paused" ] || return 0
 
+  # TDD 0011 / MAJOR-5: guard $INTEGRATION — under THROUGHLINE_SOURCE_ONLY=1
+  # (the test harness) the runner's INTEGRATION assignment is skipped, and
+  # an unguarded `"$INTEGRATION"` aborts the test process under `set -u`.
+  local integration="${INTEGRATION:-}"
   local branch branch_head_at_pause gates_csv
   branch="$(sed -n 's/.*"branch":"\([^"]*\)".*/\1/p' "$f" | head -1)"
   branch_head_at_pause="$(_read_fragment_field "$f" branch_head_at_pause)"
@@ -897,36 +929,66 @@ _resume_from() {
   # branch. Scanning HEAD's full ancestry (the previous behavior) would
   # falsely match a `test(failing):` commit from any prior TDD on the same
   # long-lived integration branch.
-  local has_test_first=0 base_ref=""
-  base_ref="$(git merge-base HEAD "$INTEGRATION" 2>/dev/null \
-               || git merge-base HEAD "origin/$INTEGRATION" 2>/dev/null \
-               || true)"
-  if [ -n "$base_ref" ]; then
-    if git log --format='%s' "$base_ref..HEAD" 2>/dev/null | grep -qiE '^test\(failing\)'; then
-      has_test_first=1
-    fi
+  #
+  # TDD 0011 / BLOCKER-3: in COMBINED mode the build branch is SHARED across
+  # all TDDs in $CHANGE; another TDD's `test(failing):` commit would falsely
+  # satisfy this TDD's gate-1 check. Skip the resume optimization in
+  # combined mode — force has_test_first=0 so gate 1 re-runs. The fragment
+  # still carries the prior gates_completed list (which is cleared below
+  # via the empty done_list), so we get safe rebuild semantics without
+  # double-committing (gate_one's build wrapper handles that case).
+  local has_test_first=0 base_ref="" ref_to_scan
+  if [ "${COMBINED:-0}" = "1" ]; then
+    has_test_first=0
   else
-    # Couldn't compute a merge-base (integration branch missing / detached
-    # history). Fall back to the wider scan but warn — NFR-4: never silently
-    # claim a gate complete on degraded evidence.
-    echo "warning: _resume_from $slug — no merge-base with $INTEGRATION; falling back to full HEAD scan" >&2
-    if git log --format='%s' HEAD 2>/dev/null | grep -qiE '^test\(failing\)'; then
-      has_test_first=1
+    # Source A's scan target: TDD 0011 / BLOCKER-1+MAJOR-10 — the divergence
+    # guard below now resolves the build branch via refs/heads/$branch (not
+    # HEAD), so we know exactly which ref we're scanning regardless of the
+    # process's CWD. The test-first scan must use the same ref.
+    ref_to_scan="HEAD"
+    if [ -n "$branch" ] && git rev-parse --verify "refs/heads/$branch" >/dev/null 2>&1; then
+      ref_to_scan="refs/heads/$branch"
+    fi
+    if [ -n "$integration" ]; then
+      base_ref="$(git merge-base "$ref_to_scan" "$integration" 2>/dev/null \
+                   || git merge-base "$ref_to_scan" "origin/$integration" 2>/dev/null \
+                   || true)"
+    fi
+    if [ -n "$base_ref" ]; then
+      if git log --format='%s' "$base_ref..$ref_to_scan" 2>/dev/null | grep -qiE '^test\(failing\)'; then
+        has_test_first=1
+      fi
+    else
+      # No merge-base computable (integration missing / detached history).
+      # Fall back to the wider scan but warn — NFR-4: never silently claim
+      # a gate complete on degraded evidence.
+      echo "warning: _resume_from $slug — no merge-base with ${integration:-<unset>}; falling back to full $ref_to_scan scan" >&2
+      if git log --format='%s' "$ref_to_scan" 2>/dev/null | grep -qiE '^test\(failing\)'; then
+        has_test_first=1
+      fi
     fi
   fi
   if [ "$has_test_first" -ne 1 ]; then
-    _update_paused_cause "$slug" "resume-blocked-build-state-missing"
-    return 0
+    # TDD 0011 / BLOCKER-2: refuse-to-resume returns rc=3 so the driver can
+    # halt this TDD without falling through to gate_one (which would
+    # silently overwrite paused→building). All callers (parallel /
+    # sequential / combined) MUST check $? and skip gate_one on rc=3.
+    _update_paused_cause "$slug" "resume-blocked-build-state-missing" || true
+    return 3
   fi
 
   # Divergence: if the fragment recorded a HEAD SHA at pause time and the
-  # current HEAD differs, the branch was rewritten while paused.
-  if [ -n "$branch_head_at_pause" ]; then
+  # current branch ref differs, the branch was rewritten while paused.
+  # TDD 0011 / BLOCKER-1+MAJOR-10: resolve via refs/heads/$branch (not the
+  # process's HEAD) so the check is correct regardless of CWD. This is
+  # what fixes parallel-mode resume — the previous HEAD-based check saw
+  # the main repo's HEAD when called outside the subshell.
+  if [ -n "$branch_head_at_pause" ] && [ -n "$branch" ]; then
     local current_head
-    current_head="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+    current_head="$(git rev-parse --verify "refs/heads/$branch" 2>/dev/null || true)"
     if [ -n "$current_head" ] && [ "$current_head" != "$branch_head_at_pause" ]; then
-      _update_paused_cause "$slug" "resume-blocked-branch-divergence"
-      return 0
+      _update_paused_cause "$slug" "resume-blocked-branch-divergence" || true
+      return 3   # see BLOCKER-2
     fi
   fi
 
@@ -1017,9 +1079,13 @@ gate_one() {  # <tdd> <review-base-ref> <log>
     set_tdd_state "$slug" verifying verify-runtime
     _retry_in_gate _verify_runtime_one_gated verify-runtime "$slug" "$log" "$tdd" "$rbase" "$log"
     rrc=$?
-    rvs="$(verify_runtime_status "$log")"
+    # TDD 0011 / MAJOR-4: paused short-circuit MUST run before any verdict
+    # scan (same as gate 1 / BL-1). A stale `VERIFY_RUNTIME: BLOCKED` line
+    # from a transient earlier attempt would otherwise misclassify a fatal
+    # failure as status=blocked, violating NFR-4 verdict honesty.
     if [ "$rrc" -eq 2 ]; then
       echo "PAUSED runtime-verify"; return 2; fi
+    rvs="$(verify_runtime_status "$log")"
     case "$rvs" in
       *PASS*|*SKIP*) set_tdd_state "$slug" verifying verify-runtime "" verify-runtime ;;
       *BLOCKED*) set_tdd_state "$slug" blocked "" "runtime-verify BLOCKED (couldn't observe)"
@@ -1036,9 +1102,11 @@ gate_one() {  # <tdd> <review-base-ref> <log>
     set_tdd_state "$slug" reviewing review
     _retry_in_gate _review_one_gated review "$slug" "$log" "$tdd" "$rbase" "$log"
     rrc=$?
-    rs="$(review_status "$log")"
+    # TDD 0011 / MAJOR-4: paused short-circuit before verdict scan (see
+    # gate 3 above + BL-1).
     if [ "$rrc" -eq 2 ]; then
       echo "PAUSED review"; return 2; fi
+    rs="$(review_status "$log")"
     case "$rs" in
       *PASS*) set_tdd_state "$slug" reviewing review "" review ;;
       *BLOCK*) set_tdd_state "$slug" failed "" "review BLOCK"
@@ -1123,9 +1191,19 @@ if [ "$PARALLEL" -eq 1 ]; then
     elif [ "$RESUME" -eq 1 ]; then
       # Branch is gone between pause and resume → documented paused_cause.
       echo "- $slug — PAUSED (branch feat/$slug missing; resume-blocked-branch-missing)" >>"$REPORT"
-      _update_paused_cause "$slug" "resume-blocked-branch-missing"
+      _update_paused_cause "$slug" "resume-blocked-branch-missing" || true
       continue
     else
+      # TDD 0011 / MAJOR-9: detect orphan feat/<slug> branches from a prior
+      # run that the user cleaned state.d/ for. Fresh-start in parallel
+      # mode otherwise fails opaquely with "branch already exists".
+      if git show-ref --verify --quiet "refs/heads/feat/$slug"; then
+        { echo "- $slug — FAIL (orphan branch feat/$slug exists from a prior run;"
+          echo "  delete it with: git branch -D feat/$slug   (and any worktree at $wt)"
+          echo "  before retrying)"; } >>"$REPORT"
+        set_tdd_state "$slug" failed "" "orphan branch feat/$slug exists; delete before retry"
+        continue
+      fi
       if ! git worktree add -b "feat/$slug" "$wt" "$BASE" >>"$log" 2>&1; then
         echo "worktree failed for $slug" >>"$log"
         set_tdd_state "$slug" failed "" "worktree create failed"
@@ -1133,15 +1211,34 @@ if [ "$PARALLEL" -eq 1 ]; then
       fi
     fi
     set_tdd_meta "$slug" "branch=feat/$slug"
-    [ "$RESUME" -eq 1 ] && _resume_from "$slug"
     abslog="$log"
-    # Export the resume-gates-done variable so the subshell inherits it.
+    # Export the resume-gates-done variable name AHEAD of the subshell so
+    # _resume_from's `export "$var"` (which runs in the subshell) sets a
+    # variable already attributed-exported in the calling scope. The
+    # subshell inherits the exported binding either way; the
+    # `_rkey_export` capture here is for the (rare) tests that read it
+    # back from the parent. TDD 0011 / BLOCKER-1: _resume_from MUST run
+    # INSIDE the subshell so its git operations resolve against the
+    # worktree's HEAD (the build branch), not the main repo's HEAD.
     if [ "$RESUME" -eq 1 ]; then
       _rkey_export="$(_resume_gates_var "$slug")"
       export "${_rkey_export?}"
     fi
     ( cd "$wt" || exit 1
       install_deps "$abslog"
+      # TDD 0011 / BLOCKER-1: resume inside the subshell so git context is
+      # the worktree. BLOCKER-2: refuse-to-resume returns rc=3; emit a
+      # report line and skip gate_one for this TDD.
+      if [ "$RESUME" -eq 1 ]; then
+        _resume_from "$slug"
+        _rrc=$?
+        if [ "$_rrc" -eq 3 ]; then
+          # Read the just-written paused_cause for the report.
+          _cause="$(_read_fragment_field "$STATE_DIR/$slug.json" paused_cause)"
+          printf 'PARSTATUS::PAUSED (refuse-to-resume: %s)\n' "${_cause:-unknown}" >>"$abslog"
+          exit 0
+        fi
+      fi
       pre="$(git rev-parse HEAD)"
       st="$(gate_one "$tdd" "$pre" "$abslog")"; rc=$?
       printf 'PARSTATUS::%s\n' "$st" >>"$abslog"
@@ -1205,7 +1302,19 @@ else
       # blank (the state_init default), the guard short-circuits and never
       # detects mid-resume divergence on the first resume.
       set_tdd_meta "$slug" "branch=$CHANGE"
-      [ "$RESUME" -eq 1 ] && _resume_from "$slug"
+      if [ "$RESUME" -eq 1 ]; then
+        _resume_from "$slug"
+        _rrc=$?
+        if [ "$_rrc" -eq 3 ]; then
+          # TDD 0011 / BLOCKER-2: refuse-to-resume — log the cause, halt
+          # (combined mode follows the paused_halt semantics), do NOT
+          # call gate_one which would overwrite paused→building.
+          _cause="$(_read_fragment_field "$STATE_DIR/$slug.json" paused_cause)"
+          echo "- $slug — refuse-to-resume: ${_cause:-unknown} (no gate run)" >>"$REPORT"
+          paused_halt=1
+          continue
+        fi
+      fi
       pre="$(git rev-parse HEAD 2>/dev/null || echo "$BASE")"
       echo ">>> $slug"; st="$(gate_one "$tdd" "$pre" "$log")"; rc=$?
       echo "  $st"; echo "- $slug — $st (log: $log)" >>"$REPORT"
@@ -1265,7 +1374,18 @@ else
         fi
       fi
       set_tdd_meta "$slug" "branch=$branch"
-      [ "$RESUME" -eq 1 ] && _resume_from "$slug"
+      if [ "$RESUME" -eq 1 ]; then
+        _resume_from "$slug"
+        _rrc=$?
+        if [ "$_rrc" -eq 3 ]; then
+          # TDD 0011 / BLOCKER-2: refuse-to-resume halts cleanly. Log
+          # the cause, mark paused_halt, do NOT call gate_one (which
+          # would overwrite paused→building and lose the cause).
+          _cause="$(_read_fragment_field "$STATE_DIR/$slug.json" paused_cause)"
+          echo "- $slug — refuse-to-resume: ${_cause:-unknown} (no gate run)" >>"$REPORT"
+          paused_halt=1; continue
+        fi
+      fi
       pre="$(git rev-parse HEAD)"
       echo ">>> $slug (off $prev)"; st="$(gate_one "$tdd" "$pre" "$log")"; rc=$?; echo "  $st"
       case "$rc" in

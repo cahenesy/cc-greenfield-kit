@@ -310,6 +310,79 @@ echo "[rt-C] THROUGHLINE_RUNTIME_VERIFY_MODEL pin wins over classifier"
   cd "$REPO"; rm -rf "$TMPROOT"
 )
 
+# --- Review-blocker coverage (M1/M2/M3 from the TDD 0013 review pass) --------
+# Each test below exercises a silent-failure mode the independent reviewer
+# flagged. The pre-fix lint/runner answers `clean`/`nontrivial` to the caller
+# despite an underlying failure, violating NFR-4 verdict honesty. The fixes
+# either propagate the failure as an error code (rc=2) or attach a
+# distinguishable note to the log line so triage can tell error from genuine.
+
+echo "[lint-M1] section.empty lint emits finding even when input directory is read-only"
+(
+  # Pre-fix: tl_lint_structural's section.empty pass writes to
+  # "$f.tdd-lint.empty.$$" adjacent to the input. Read-only directory →
+  # redirect fails (silenced by 2>/dev/null) → [ -s ... ] is false → zero
+  # findings, rc=0 (silent FAIL). The fix must keep the finding visible.
+  TMP="$(mktemp -d)"
+  cp "$FIX/empty-section.md" "$TMP/empty-section.md"
+  chmod -w "$TMP"
+  out="$(bash "$LINT" "$TMP/empty-section.md" 2>/dev/null)"; rc=$?
+  chmod +w "$TMP"; rm -rf "$TMP"
+  expect_exit 1 "$rc" "exit code 1 (major) under read-only dir"
+  printf '%s\n' "$out" | grep -q 'section.empty' \
+    && ok "stdout names section.empty even under read-only dir" \
+    || bad "expected /section.empty/ in stdout under read-only dir (got: $out)"
+)
+
+echo "[lint-M2] placeholder lint surfaces awk crash as rc=2 instead of mapping it to clean"
+(
+  # Pre-fix: case "$?" in 1) rc=1 ;; *) rc=0 ;; — awk exit ≥2 (crash) maps
+  # to "clean", so a broken awk run looks like a TDD with no placeholders.
+  # The fix must propagate non-{0,1} awk exits as rc=2 (blocker) with a
+  # stderr message.
+  TMP="$(mktemp -d)"
+  cat > "$TMP/awk" <<'EOF2'
+#!/usr/bin/env bash
+exit 3
+EOF2
+  chmod +x "$TMP/awk"
+  export PATH="$TMP:$PATH"
+  source "$LINT"
+  err="$(tl_lint_placeholders "$FIX/clean.md" 2>&1 >/dev/null)"; rc=$?
+  unset -f tl_lint_structural tl_lint_placeholders tl_lint_traced tl_lint_all _tl_emit 2>/dev/null
+  rm -rf "$TMP"
+  expect_exit 2 "$rc" "tl_lint_placeholders rc=2 on awk crash"
+  printf '%s\n' "$err" | grep -q 'awk' \
+    && ok "stderr names awk failure" \
+    || bad "expected stderr to mention awk crash (got: $err)"
+)
+
+echo "[rt-M3] verify_runtime_one notes classifier failure distinctly from genuine nontrivial"
+(
+  # Pre-fix: a tl_classify_plan that returns non-zero leaves cls="" and
+  # falls through to vm="$MODEL"; cls="nontrivial"; note="". The gate log
+  # line then reads `runtime-verify model=opus (plan=nontrivial)` — IDENTICAL
+  # to a genuine nontrivial classification. The fix must annotate the
+  # classifier-failed case with a distinguishing note so triage can tell
+  # error from genuine.
+  setup_runtime
+  mkdir -p "$TMPROOT/scripts/lib"
+  cat > "$TMPROOT/scripts/lib/plan-classifier.sh" <<'EOF3'
+#!/usr/bin/env bash
+tl_classify_plan() { return 2; }
+EOF3
+  SDIR="$TMPROOT/scripts"
+  THROUGHLINE_SOURCE_ONLY=1 source "$IMPL"
+  MODEL=opus
+  RVMTPL="$REPO/scripts/verify-runtime-prompt.md"
+  LOGF="$TMPROOT/0001-cls-fail.log"; : > "$LOGF"
+  PATH="$TMPROOT/stub/bin:$PATH" verify_runtime_one docs/tdd/0001-mechanical.md HEAD "$LOGF" >/dev/null 2>&1
+  grep -q 'classifier failed' "$LOGF" \
+    && ok "log line names 'classifier failed' (distinct from genuine nontrivial)" \
+    || bad "expected /classifier failed/ in log (got: $(cat "$LOGF"))"
+  cd "$REPO"; rm -rf "$TMPROOT"
+)
+
 PASS="$(grep -c '^ok$'   "$RESULTS" 2>/dev/null)"; PASS="${PASS:-0}"
 FAIL="$(grep -c '^fail$' "$RESULTS" 2>/dev/null)"; FAIL="${FAIL:-0}"
 rm -f "$RESULTS"

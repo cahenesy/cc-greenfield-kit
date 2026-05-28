@@ -513,6 +513,59 @@ combined effect closes the PRD open question across both surfaces.
 
 No `BLOCKERS.md` entries to resolve.
 
+## Touched files
+
+- `scripts/lib/repo-id.sh` (modified, additive) — new `tl_drafts_dir`
+  function per Components §1
+- `scripts/lib/drafts.sh` (new) — seven `tl_draft_*` helper functions
+  per Components §2
+- `scripts/lib/json-escape.sh` (new) — `json_escape` promoted from
+  `scripts/implement.sh` per Components §3
+- `scripts/implement.sh` (modified) — removes inline `json_escape`,
+  sources the new helper per Components §3 + §6
+- `skills/prd-author/SKILL.md` (modified) — five concrete prompt edits
+  per Components §4
+- `skills/tdd-author/SKILL.md` (modified) — five concrete prompt edits
+  + two skill-specific tweaks per Components §5
+
+Total: 6 files touched.
+
+## Expected diff size
+
+- `scripts/lib/repo-id.sh` — ~15 lines added (one function)
+- `scripts/lib/drafts.sh` — ~180 lines added (seven helper functions;
+  this is a meaty new helper file)
+- `scripts/lib/json-escape.sh` — ~25 lines (new, code-move from
+  `implement.sh`) (exception: legitimately-wide code move; pure
+  promotion of `json_escape`, behavior byte-identical, verified by the
+  gate test suite per Components §3)
+- `scripts/implement.sh` — ~-25 lines (remove inline copy + add source
+  line); net reduction
+- `skills/prd-author/SKILL.md` — ~75 lines added (five prompt edits,
+  each a substantive paragraph)
+- `skills/tdd-author/SKILL.md` — ~75 lines added (five prompt edits
+  + two skill-specific tweaks)
+
+Total expected diff: ~395 lines across 6 files. All per-file under the
+300-line default `THROUGHLINE_TDD_MAX_FILE_DIFF` bound; no per-file
+exceptions needed.
+
+## Scope override
+
+This TDD's doc body is over the 350-line default
+`THROUGHLINE_TDD_MAX_LINES` cap established by TDD 0014. Justification:
+this TDD was authored before TDD 0014 (the bounds didn't exist when
+this TDD was written). Its substance is a coordinated five-prompt-edit
+operation against both authoring skills (`prd-author` and `tdd-author`)
+plus their shared helper substrate (`scripts/lib/drafts.sh` +
+`json-escape.sh` promotion); the five-edit structure is mirrored in
+both skill files for parallel resume/persist behavior. Splitting at this
+point would either duplicate the helper layer description across two
+TDDs or fragment the prompt-edit set across skills that need consistent
+behavior. The override is recorded retroactively per FR-53's escape
+clause (legitimately-wide design; coupled prompt-edit operation across
+two skill files sharing one helper substrate).
+
 ## Decisions to promote (ADR candidates)
 
 **None.**

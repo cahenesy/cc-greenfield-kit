@@ -1,4 +1,4 @@
-# TDD 9004: TBD only inside a fence
+# TDD 9004: placeholder allowed inside fenced code
 
 Status: draft
 PRD refs: FR-99
@@ -7,9 +7,9 @@ ADR constraints: 0003
 
 ## Approach
 
-The only occurrence of TBD-as-literal in this TDD is inside a fenced code
-block and inside angle-brackets template metasyntax. Neither should fire a
-finding.
+The only occurrences of the forbidden placeholder phrase in this fixture are
+inside a fenced code block and inside angle-brackets template metasyntax.
+Neither should fire a finding.
 
 ```text
 example placeholder: TBD

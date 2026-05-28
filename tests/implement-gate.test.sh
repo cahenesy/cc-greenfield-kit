@@ -315,7 +315,7 @@ fi
 # Run the token-spend-reduction eval (TDD 0013 / FR-51 + FR-52) as part of the
 # same suite. Same rationale: it tests runner-adjacent helpers (tdd-lint,
 # plan-classifier) plus verify_runtime_one's tiering, all part of the gate
-# scaffolding that VERIFY_TEST_CMD exercises in CI.
+# scaffolding that CI_CHECKS_TEST_CMD exercises in CI.
 TSR="$(dirname "$0")/token-spend-reduction.test.sh"
 TSR_FAIL=0
 if [ -f "$TSR" ]; then

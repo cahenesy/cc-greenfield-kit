@@ -39,10 +39,14 @@
 #   3. runtime-verify  — a SEPARATE `claude -p` process drives the BUILT artifact
 #                        to the TDD's verification observation points and confirms
 #                        the expected observations hold (PASS/SKIP), keeping
-#                        PASS/FAIL/BLOCKED/SKIP distinct (NFR-4). The verification
-#                        mechanism is the project's — delegated to
-#                        `superpowers:verification-before-completion` / `/verify`,
-#                        never a bundled harness (FR-26 / ADR 0004).
+#                        PASS/FAIL/BLOCKED/SKIP distinct (NFR-4). Runs on a model
+#                        the runner tiers based on the verification plan's
+#                        complexity (mechanical observations → sonnet; nontrivial
+#                        → the build model); override via
+#                        `THROUGHLINE_RUNTIME_VERIFY_MODEL` (TDD 0013 / FR-52).
+#                        The verification mechanism is the project's — delegated
+#                        to `superpowers:verification-before-completion` /
+#                        `/verify`, never a bundled harness (FR-26 / ADR 0004).
 #   4. review          — a SEPARATE `claude -p` process on a DIFFERENT model
 #                        (default sonnet vs an opus build) for genuine reviewer
 #                        diversity (not a subagent of the author) that must end
@@ -969,17 +973,55 @@ review_one() {  # <tdd> <base-ref> <log>
 }
 # Runtime-verify gate (FR-25 / FR-26 / ADR 0004): drives the BUILT artifact to
 # the TDD's verification observation points in a FRESH `claude -p` process — so
-# it is independent of the build's self-report regardless of model. Runs on the
-# build model (capability to drive the artifact); cwd is already the build
-# worktree with deps installed by `install_deps`. The {{BASE}} substitution
-# scopes the diff so the verifier can SEE which change to focus its observation
-# on; it orients the verifier, it does not gate on the diff. The verdict is
-# parsed from the transcript (`VERIFY_RUNTIME: ...`), exactly as build's
-# `BATCH_RESULT:` and review's `REVIEW_RESULT:` already are.
+# it is independent of the build's self-report regardless of model. Model is
+# tiered by the verification plan's complexity (TDD 0013 / FR-52): mechanical
+# observations (CLI exit code, log line grep, file presence, HTTP status code,
+# etc.) run on `sonnet`; plans needing browser/UI driving, multi-step interactive
+# flows, or judgment about ambiguous output run on the build `$MODEL`. The env
+# `THROUGHLINE_RUNTIME_VERIFY_MODEL` pins a model unconditionally (matching the
+# `--review-model` / `THROUGHLINE_REVIEW_MODEL` escape hatch). If the classifier
+# helper is missing on disk (e.g. partial install), fall back to `$MODEL` and
+# note the missing classifier in the gate log — no correctness regression, just
+# no token saving for that run. cwd is the build worktree with deps installed
+# by `install_deps`. The {{BASE}} substitution scopes the diff so the verifier
+# can SEE which change to focus its observation on; it orients the verifier, it
+# does not gate on the diff. The verdict is parsed from the transcript
+# (`VERIFY_RUNTIME: ...`), exactly as build's `BATCH_RESULT:` and review's
+# `REVIEW_RESULT:` already are.
 verify_runtime_one() {  # <tdd> <base-ref> <log>
-  local tdd="$1" base="$2" log="$3" prompt
+  local tdd="$1" base="$2" log="$3" prompt cls vm classifier note=""
   prompt="$(sed -e "s#{{TDD}}#${tdd}#g" -e "s#{{BASE}}#${base}#g" "$RVMTPL")"
-  local args=(-p "$prompt" --permission-mode auto); [ -n "$MODEL" ] && args+=(--model "$MODEL")
+  # Model tiering (FR-52). The env override always wins.
+  vm="${THROUGHLINE_RUNTIME_VERIFY_MODEL:-}"
+  classifier="${SDIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/lib/plan-classifier.sh"
+  if [ -z "$vm" ]; then
+    if [ -f "$classifier" ]; then
+      # shellcheck source=/dev/null
+      . "$classifier"
+      cls="$(tl_classify_plan "$tdd" 2>/dev/null)"
+      case "$cls" in
+        mechanical) vm="sonnet" ;;
+        nontrivial) vm="$MODEL" ;;
+        *)          vm="$MODEL"; cls="nontrivial" ;;
+      esac
+    else
+      vm="$MODEL"; cls="nontrivial"; note=" (classifier missing)"
+    fi
+  else
+    # Env-pinned: still classify for the observability line (so triage knows
+    # what the heuristic *would* have picked), but the pin wins.
+    if [ -f "$classifier" ]; then
+      # shellcheck source=/dev/null
+      . "$classifier"
+      cls="$(tl_classify_plan "$tdd" 2>/dev/null)"
+      [ -z "$cls" ] && cls="nontrivial"
+    else
+      cls="nontrivial"; note=" (classifier missing)"
+    fi
+  fi
+  printf 'runtime-verify model=%s (plan=%s)%s\n' "$vm" "$cls" "$note" >> "$log"
+  local args=(-p "$prompt" --permission-mode auto)
+  [ -n "$vm" ] && args+=(--model "$vm")
   local start _rc; start=$(date +%s); _rc=0
   claude "${args[@]}" >>"$log" 2>&1; _rc=$?
   record_session_pointer "$log" "$start"

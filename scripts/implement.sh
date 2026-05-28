@@ -364,8 +364,23 @@ _write_run_fragment() {
       esac
     done
   fi
+  # TDD 0011 / iter-5 MAJOR-4: preserve pause_started_at across writes.
+  # The previous code stamped a fresh `date +%s` on every `paused` write,
+  # so a second TDD pausing in a parallel run would overwrite the first's
+  # timestamp. Read the existing value and reuse it if the run was already
+  # paused; only stamp on the first transition into paused.
   local pause_started_lit='null'
-  if [ "$state" = "paused" ]; then pause_started_lit="$(date +%s)"; fi
+  if [ "$state" = "paused" ]; then
+    local _prior_pause=""
+    if [ -f "$STATE_DIR/run.json" ]; then
+      _prior_pause="$(sed -n 's/.*"pause_started_at":\([0-9]*\).*/\1/p' "$STATE_DIR/run.json" | head -1)"
+    fi
+    if [ -n "$_prior_pause" ] && [ "$_prior_pause" != "null" ] && [ "$_prior_pause" -gt 0 ] 2>/dev/null; then
+      pause_started_lit="$_prior_pause"
+    else
+      pause_started_lit="$(date +%s)"
+    fi
+  fi
   # TDD 0011 / iter-3 MAJOR-5: same printf+mv failure handling as
   # _write_tdd_fragment.
   if ! printf '{"schema":1,"started_at":%d,"updated_at":%d,"pid":%d,"integration_branch":"%s","mode":"%s","change":"%s","logdir":"%s","total":%d,"completed":%d,"failed":%d,"blocked":%d,"skipped":%d,"paused":%d,"state":"%s","pause_started_at":%s}\n' \
@@ -414,6 +429,29 @@ state_init() {
     STATE_MODE="$(sed -n 's/.*"mode":"\([^"]*\)".*/\1/p' "$STATE_DIR/run.json" | head -1)"
     [ -z "$STATE_STARTED_AT" ] && STATE_STARTED_AT=$(date +%s)
     [ -z "$STATE_MODE" ] && STATE_MODE="sequential"
+    # TDD 0011 / iter-5 BLOCKER-1+2: restore the CLI flags that drive
+    # branch naming and driver dispatch. Without these, a resume gets
+    # a FRESH timestamped $CHANGE (so the sequential driver computes
+    # branch names that don't exist) and runs the sequential driver
+    # even for a paused parallel/combined run.
+    local _resume_change _resume_mode
+    _resume_change="$(sed -n 's/.*"change":"\([^"]*\)".*/\1/p' "$STATE_DIR/run.json" | head -1)"
+    _resume_mode="$STATE_MODE"
+    # Only override $CHANGE if the caller didn't pass --change explicitly.
+    # The default CHANGE format from the runner is "build/<ts>"; if the
+    # current value still matches that pattern, the caller used the
+    # default and we should restore the paused run's value.
+    if [ -n "$_resume_change" ] && [ "$CHANGE" != "$_resume_change" ]; then
+      case "$CHANGE" in
+        build/[0-9]*-[0-9]*) CHANGE="$_resume_change" ;;
+        *) : ;;   # explicit --change was passed; respect it
+      esac
+    fi
+    case "$_resume_mode" in
+      parallel) PARALLEL=1; COMBINED=0 ;;
+      combined) PARALLEL=0; COMBINED=1 ;;
+      sequential|*) PARALLEL=0; COMBINED=0 ;;
+    esac
     # TDD 0011 / MA-4: queue freeze. Newly-buildable TDDs that appeared on the
     # integration branch BETWEEN pause and resume must NOT be built by this
     # resuming run — resume's contract is "pick up where you left off", not
@@ -461,10 +499,18 @@ state_init() {
     i=$((i+1))
     slug="$(basename "$path" .md)"
     n=$((10#${slug%%-*}))
-    _write_tdd_fragment "$slug" "$n" "$path" "$i" pending "" \
-      "$STATE_STARTED_AT" "$STATE_STARTED_AT" "" "" "" ""
+    # TDD 0011 / iter-5 MAJOR-2: fail loudly on fresh-start fragment-write
+    # failures. A disk-full here would otherwise produce empty/missing
+    # fragments that subsequent set_tdd_state reads round-trip as empty.
+    if ! _write_tdd_fragment "$slug" "$n" "$path" "$i" pending "" \
+      "$STATE_STARTED_AT" "$STATE_STARTED_AT" "" "" "" "" \
+      "" "" "" ""; then
+      echo "FATAL: state_init could not write initial fragment for $slug" | tee -a "$REPORT" >&2
+      exit 1
+    fi
   done
-  _write_run_fragment running
+  _write_run_fragment running \
+    || { echo "FATAL: state_init could not write initial run.json" | tee -a "$REPORT" >&2; exit 1; }
   ln -sfn "$(basename "$LOGDIR")" "$MAINREPO/docs/tdd/.implement-logs/latest" 2>/dev/null || true
 }
 
@@ -502,10 +548,19 @@ set_tdd_state() {
          else gates_csv="$gates_csv,$gate_done"; fi ;;
     esac
   fi
+  # TDD 0011 / iter-5 MAJOR-3: clear paused_cause when status leaves paused.
+  # Otherwise a fragment that goes paused → building → done retains a stale
+  # paused_cause label, confusing any forensic consumer.
+  if [ "$status" != "paused" ]; then paused_cause=""; fi
   now=$(date +%s)
-  _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
+  # TDD 0011 / iter-5 MAJOR-1: propagate _write_tdd_fragment failures so
+  # the runner doesn't silently continue with a stale fragment.
+  if ! _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
     "${sta:-$now}" "$now" "$branch" "$pr_url" "$log" "$note" \
-    "$paused_cause" "$gates_csv" "$retries_json" "$branch_head"
+    "$paused_cause" "$gates_csv" "$retries_json" "$branch_head"; then
+    echo "error: set_tdd_state: could not write $slug fragment (status=$status)" >&2
+    return 1
+  fi
 }
 
 # set_tdd_meta <slug> [branch=<v>] [pr_url=<v>] [log=<v>] [note=<v>]
@@ -540,9 +595,13 @@ set_tdd_meta() {
     note=*)   note="${kv#note=}" ;;
   esac; done
   now=$(date +%s)
-  _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
+  # TDD 0011 / iter-5 MAJOR-1: propagate write failures.
+  if ! _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
     "${sta:-$now}" "$now" "$branch" "$pr_url" "$log" "$note" \
-    "$paused_cause" "$gates_csv" "$retries_json" "$branch_head"
+    "$paused_cause" "$gates_csv" "$retries_json" "$branch_head"; then
+    echo "error: set_tdd_meta: could not write $slug fragment" >&2
+    return 1
+  fi
 }
 
 # --- recoverable-cause classification (TDD 0011 / FR-41) ----------------------
@@ -688,6 +747,15 @@ _retry_in_gate() {
     ''|*[!0-9]*) echo "warning: THROUGHLINE_GATE_RETRIES='$max_retries' not numeric; falling back to 3" >&2; max_retries=3 ;;
     0) echo "warning: THROUGHLINE_GATE_RETRIES=0 not allowed (would cause immediate paused-with-no-attempt); normalizing to 1" >&2; max_retries=1 ;;
   esac
+  # TDD 0011 / iter-5 MAJOR-5: cap the upper bound. backoff_base * 4^(n-1)
+  # overflows signed 64-bit around attempt=30, producing negative values
+  # that skip the sleep guard. Even before overflow, attempt~20 produces
+  # ~8e6 seconds (months) of sleep — unhelpful. 10 retries is a safe upper
+  # bound (final backoff is base*4^9 ≈ 70h with default base=30).
+  if [ "$max_retries" -gt 10 ] 2>/dev/null; then
+    echo "warning: THROUGHLINE_GATE_RETRIES=$max_retries exceeds cap of 10; capping (4^attempt overflows / huge sleeps)" >&2
+    max_retries=10
+  fi
   case "$backoff_base" in
     ''|*[!0-9]*) echo "warning: THROUGHLINE_GATE_BACKOFF_BASE='$backoff_base' not numeric; falling back to 30" >&2; backoff_base=30 ;;
   esac
@@ -778,9 +846,14 @@ _append_retry() {
     # objects with no nested brackets, so this is unambiguous.
     new="${retries_json%]},$entry]"
   fi
-  _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
+  # TDD 0011 / iter-5 MAJOR-1: propagate write failures so a failed retry-
+  # audit append doesn't silently disappear into a stale fragment.
+  if ! _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
     "${sta:-$(date +%s)}" "$(date +%s)" "$branch" "$pr_url" "$log_f" "$note" \
-    "$paused_cause" "$gates_csv" "$new" "$branch_head"
+    "$paused_cause" "$gates_csv" "$new" "$branch_head"; then
+    echo "error: _append_retry: could not write $slug fragment (retry audit lost)" >&2
+    return 1
+  fi
 }
 
 # --- per-TDD primitives (cwd = the repo or worktree they run in) ---------------
@@ -984,9 +1057,13 @@ _update_paused_cause() {
   gates_csv="$(_read_fragment_array_csv "$f" gates_completed)"
   retries_json="$(_read_fragment_raw_array "$f" retries)"
   branch_head="$(_read_fragment_field "$f" branch_head_at_pause)"
-  _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
+  # TDD 0011 / iter-5 MAJOR-1: propagate write failures.
+  if ! _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
     "${sta:-$(date +%s)}" "$(date +%s)" "$branch" "$pr_url" "$log_f" "$note" \
-    "$new_cause" "$gates_csv" "$retries_json" "$branch_head"
+    "$new_cause" "$gates_csv" "$retries_json" "$branch_head"; then
+    echo "error: _update_paused_cause: could not write $slug fragment (cause=$new_cause)" >&2
+    return 1
+  fi
 }
 
 # _resume_from <slug> (TDD 0011 / FR-40)
@@ -1322,8 +1399,23 @@ if [ "$PARALLEL" -eq 1 ]; then
       # add` here fails with "<wt> already exists" and the TDD is
       # permanently marked failed. Detect a pre-registered worktree
       # pointing at feat/$slug and reuse it instead of re-creating.
+      # TDD 0011 / iter-5 BLOCKER-3: $wt is a RELATIVE path
+      # ("../$(basename $PWD)-wt-$slug") but `git worktree list --porcelain`
+      # always emits ABSOLUTE paths. Comparing them directly would never
+      # match → the reuse guard becomes dead code. Canonicalize $wt first
+      # (resolve via the parent dir + basename so we don't require the
+      # directory to exist yet — though in the resume case it usually does).
       _wt_existing=""
-      if git worktree list --porcelain 2>/dev/null | awk -v p="$wt" '
+      _wt_abs=""
+      if [ -d "$wt" ]; then
+        _wt_abs="$(cd "$wt" 2>/dev/null && pwd -P)"
+      else
+        # Resolve the parent and append the leaf; works even if $wt itself
+        # was removed.
+        _wt_parent="$(cd "$(dirname "$wt")" 2>/dev/null && pwd -P)"
+        [ -n "$_wt_parent" ] && _wt_abs="$_wt_parent/$(basename "$wt")"
+      fi
+      if [ -n "$_wt_abs" ] && git worktree list --porcelain 2>/dev/null | awk -v p="$_wt_abs" '
         /^worktree / { w=substr($0,10) }
         /^branch / { if (w==p) { print substr($0,8); exit } }
       ' | grep -qE "(^|/)feat/$slug\$"; then

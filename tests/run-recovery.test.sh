@@ -416,6 +416,57 @@ echo "[4.d] _resume_from in combined mode skips gate-1 done-list (force re-run)"
     || bad "combined-mode done_list should be empty (got: '$done_list')"
 ) || true
 
+# --- iter-5 BLOCKER-1+2: resume restores CHANGE/PARALLEL/COMBINED ---------
+echo "[8.a] state_init resume branch restores CHANGE / PARALLEL / COMBINED from run.json"
+( D="$ROOT/8a"; mkdir -p "$D/state.d"
+  # Write a fake paused run with parallel mode + non-default change.
+  printf '{"schema":1,"started_at":1,"updated_at":2,"pid":0,"integration_branch":"master","mode":"parallel","change":"build/20260101-000000","logdir":"%s","total":1,"completed":0,"failed":0,"blocked":0,"skipped":0,"paused":1,"state":"paused","pause_started_at":2}\n' "$D" > "$D/state.d/run.json"
+  printf '{"n":1,"slug":"0001-alpha","path":"docs/tdd/0001-alpha.md","queue_pos":1,"status":"paused","stage":"build","started_at":1,"updated_at":2,"branch":"feat/0001-alpha","pr_url":"","log":"","note":"paused","paused_cause":"ratelimit","gates_completed":[],"retries":[],"branch_head_at_pause":null}\n' > "$D/state.d/0001-alpha.json"
+  ln -sfn "$D" "$D/../latest" 2>/dev/null || true
+  # state_init reads STATE_DIR/run.json; simulate the runner-init values
+  # the resume branch is supposed to restore.
+  ( cd "$D"
+    export THROUGHLINE_SOURCE_ONLY=1
+    # shellcheck disable=SC1090
+    source "$IMPL"
+    LOGDIR="$D"; STATE_DIR="$D/state.d"; REPORT="$D/report.md"
+    INTEGRATION="master"; MAINREPO="$D"; mkdir -p "$D/docs/tdd/.implement-logs"
+    RESUME=1; PARALLEL=0; COMBINED=0
+    CHANGE="build/$(date +%Y%m%d-%H%M%S)"   # default-format value
+    TDDS=("docs/tdd/0001-alpha.md")
+    state_init
+    [ "$CHANGE" = "build/20260101-000000" ] && ok "CHANGE restored from run.json" \
+      || bad "CHANGE should restore from run.json (got '$CHANGE')"
+    [ "$PARALLEL" -eq 1 ] && ok "PARALLEL flag set from mode=parallel" \
+      || bad "PARALLEL should be 1 (got $PARALLEL)"
+    [ "$COMBINED" -eq 0 ] && ok "COMBINED stays 0 for parallel mode" \
+      || bad "COMBINED should be 0 (got $COMBINED)"
+  )
+) || true
+
+echo "[8.b] state_init resume branch maps mode=combined to COMBINED=1"
+( D="$ROOT/8b"; mkdir -p "$D/state.d"
+  printf '{"schema":1,"started_at":1,"updated_at":2,"pid":0,"integration_branch":"master","mode":"combined","change":"ci-change","logdir":"%s","total":1,"completed":0,"failed":0,"blocked":0,"skipped":0,"paused":1,"state":"paused","pause_started_at":2}\n' "$D" > "$D/state.d/run.json"
+  printf '{"n":1,"slug":"0001-alpha","path":"docs/tdd/0001-alpha.md","queue_pos":1,"status":"paused","stage":"build","started_at":1,"updated_at":2,"branch":"ci-change","pr_url":"","log":"","note":"paused","paused_cause":"ratelimit","gates_completed":[],"retries":[],"branch_head_at_pause":null}\n' > "$D/state.d/0001-alpha.json"
+  ( cd "$D"
+    export THROUGHLINE_SOURCE_ONLY=1
+    # shellcheck disable=SC1090
+    source "$IMPL"
+    LOGDIR="$D"; STATE_DIR="$D/state.d"; REPORT="$D/report.md"
+    INTEGRATION="master"; MAINREPO="$D"; mkdir -p "$D/docs/tdd/.implement-logs"
+    RESUME=1; PARALLEL=0; COMBINED=0
+    CHANGE="build/$(date +%Y%m%d-%H%M%S)"
+    TDDS=("docs/tdd/0001-alpha.md")
+    state_init
+    [ "$COMBINED" -eq 1 ] && ok "COMBINED=1 for mode=combined" \
+      || bad "COMBINED should be 1 for combined mode (got $COMBINED)"
+    [ "$PARALLEL" -eq 0 ] && ok "PARALLEL stays 0 for combined mode" \
+      || bad "PARALLEL should be 0 (got $PARALLEL)"
+    [ "$CHANGE" = "ci-change" ] && ok "CHANGE restored to ci-change" \
+      || bad "CHANGE should be ci-change (got '$CHANGE')"
+  )
+) || true
+
 # --- iter-3 BLOCKER-1: schema-version refusal gate -------------------------
 echo "[7.a] state_init refuses to resume across an incompatible schema"
 ( cd "$REPO"

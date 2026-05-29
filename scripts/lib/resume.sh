@@ -217,7 +217,7 @@ _resume_from() {
     if [ -n "$gates_csv" ]; then done_list="${done_list},${gates_csv}"; fi
   fi
   printf -v "$var" '%s' "$done_list"
-  export "$var"
+  export "${var?}"
 }
 
 # gate_one: build -> classify -> test-first -> ci-checks.sh -> runtime-verify ->
@@ -382,7 +382,7 @@ gate_one() {  # <tdd> <review-base-ref> <log>
 
   set_tdd_state "$slug" reviewing flip
   flip_status "$tdd" "$log"
-  _terminal_state "$slug" done "" "OK (verified + reviewed)"
+  _terminal_state "$slug" "done" "" "OK (verified + reviewed)"
   echo "OK (verified + reviewed)"; return 0
 }
 

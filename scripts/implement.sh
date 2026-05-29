@@ -223,6 +223,7 @@ echo "Queue (${#TDDS[@]}):"; printf '  %s\n' "${TDDS[@]}"; echo "Report: $REPORT
 # still gets its fragment. See the call site further down.
 fi  # end THROUGHLINE_SOURCE_ONLY guard (setup block)
 
+# shellcheck disable=SC2317  # exit 0 is reached when this file is executed (not sourced)
 if [ "${THROUGHLINE_SOURCE_ONLY:-0}" = "1" ]; then return 0 2>/dev/null || exit 0; fi
 PR_PLAN=()  # ordered, bottom-up "merge me" list for stacked sequential PRs
 
@@ -578,10 +579,10 @@ fi
 # path (--check-paused reads per-TDD fragments directly) is unaffected,
 # but the display state is persistently wrong.
 if [ "$_any_paused" -eq 1 ]; then
-  set_run_state paused \
+  set_run_state "paused" \
     || echo "warning: could not write final run.json (state=paused)" | tee -a "$REPORT" >&2
 else
-  set_run_state done \
+  set_run_state "done" \
     || echo "warning: could not write final run.json (state=done)" | tee -a "$REPORT" >&2
 fi
 

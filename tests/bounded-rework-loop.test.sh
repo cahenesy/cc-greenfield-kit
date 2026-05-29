@@ -510,6 +510,161 @@ EOF
   fi
 ) || true
 
+# --- §5 wiring: gate_one review gate drives the bounded loop (FR-61/62/65/67) -
+# setup_loop_repo: git repo + scope-declaring TDD + a state fragment + a stub
+# `claude` that acts as the review gate (cats $CTL/review.out) and the rework
+# model (runs $CTL/do_rework). Gates 1-3 are marked done via RESUME_GATES_DONE_*
+# so gate_one runs ONLY the review gate. Leaves PWD in the repo.
+setup_loop_repo() {  # <dir>  (caller exports STATE_DIR etc. + sources $IMPL first)
+  local d="$1"; mkdir -p "$d/ctl" "$d/bin"
+  cd "$d" || return 1
+  git init -q -b master; git config user.email t@t.t; git config user.name t
+  mkdir -p src docs/tdd
+  printf 'orig\n' > src/a.txt
+  cat > docs/tdd/0099-fix.md <<'EOF'
+# TDD 0099: fixture
+Status: draft
+PRD refs: 1
+
+## Touched files
+- `src/a.txt` — the in-scope file
+
+## Expected diff size
+- `src/a.txt` — ~50 lines added
+EOF
+  git add -A; git commit -qm "build start" >/dev/null
+  cat > "$d/bin/claude" <<EOF
+#!/usr/bin/env bash
+prompt=""
+while [ \$# -gt 0 ]; do case "\$1" in -p) prompt="\$2"; shift 2;; *) shift;; esac; done
+if printf '%s' "\$prompt" | grep -q 'BOUNDED rework pass'; then
+  bash "$d/ctl/do_rework"; exit 0
+fi
+if printf '%s' "\$prompt" | grep -q 'INDEPENDENT review gate'; then
+  cat "$d/ctl/review.out" 2>/dev/null || echo "REVIEW_RESULT: PASS"; exit 0
+fi
+echo "BATCH_RESULT: OK"; exit 0
+EOF
+  chmod +x "$d/bin/claude"
+  export PATH="$d/bin:$PATH"
+  export RTMPL="$REPO/scripts/review-prompt.md" RWTMPL="$REPO/scripts/rework-prompt.md"
+  export REVIEW_MODEL="" REBUILD=0 BASE=master
+  export THROUGHLINE_GATE_RETRIES=1 THROUGHLINE_GATE_BACKOFF_BASE=0
+  export THROUGHLINE_REQUIRE_TEST_FIRST=0 THROUGHLINE_REQUIRE_RUNTIME_VERIFY=0
+  # Skip gates 1-3 — only the review gate (and its rework loop) runs.
+  RESUME_GATES_DONE_0099_fix="build,test-first,verify,verify-runtime"
+  export RESUME_GATES_DONE_0099_fix
+  _write_tdd_fragment 0099-fix 99 docs/tdd/0099-fix.md 1 reviewing review \
+    1000 1000 "feat/0099-fix" "" "log" "" "" "build,test-first,verify,verify-runtime" "" "" "" "" "" "" ""
+}
+
+echo "[E1] single fixable finding → rework ships → re-review PASS → flipped"
+( D="$ROOT/E1"; mkdir -p "$D/state.d"
+  export STATE_DIR="$D/state.d" STATE_STARTED_AT=1000 STATE_MODE="sequential"
+  export INTEGRATION="master" CHANGE="ci" LOGDIR="$D" MAINREPO="$D/repo"
+  TDDS=()
+  THROUGHLINE_SOURCE_ONLY=1 source "$IMPL" || { bad "source guard missing"; exit 0; }
+  setup_loop_repo "$D/repo" || { bad "setup failed"; exit 0; }
+  BS="$(git rev-parse HEAD)"
+  printf 'REVIEW_FINDING: severity=major structural=false region_lines=8 ref=review-1:1 | src/a.txt has a real bug\nREVIEW_RESULT: BLOCK found a real bug\n' > "$D/repo/ctl/review.out"
+  # rework: small in-scope fix, then the finding is resolved (review now PASS).
+  cat > "$D/repo/ctl/do_rework" <<EOF
+printf 'fixed\n' > src/a.txt
+git add -A >/dev/null 2>&1; git commit -q -m "rework: fix src/a.txt bug" >/dev/null 2>&1
+printf 'REVIEW_RESULT: PASS\n' > "$D/repo/ctl/review.out"
+EOF
+  st="$(gate_one docs/tdd/0099-fix.md "$BS" "$D/e1.log")"; rc=$?
+  F="$STATE_DIR/0099-fix.json"
+  [ "$rc" -eq 0 ] && ok "gate_one returns 0 (converged + flipped)" || bad "gate_one should converge (rc=$rc, st=$st)"
+  grep -q '"outcome":"shipped"' "$F" 2>/dev/null && ok "rework_log records a shipped attempt" || bad "rework_log should record shipped (got: $(_read_fragment_raw_array "$F" rework_log))"
+  grep -q '"model":"sonnet"' "$F" 2>/dev/null && ok "rework ran on sonnet" || bad "rework attempt should be model sonnet"
+) || true
+
+echo "[E2] reviewer-tagged structural(c) → no rework, BLOCKED + BLOCKERS (c)"
+( D="$ROOT/E2"; mkdir -p "$D/state.d"
+  export STATE_DIR="$D/state.d" STATE_STARTED_AT=1000 STATE_MODE="sequential"
+  export INTEGRATION="master" CHANGE="ci" LOGDIR="$D" MAINREPO="$D/repo"
+  TDDS=()
+  THROUGHLINE_SOURCE_ONLY=1 source "$IMPL" || { bad "source guard missing"; exit 0; }
+  setup_loop_repo "$D/repo" || { bad "setup failed"; exit 0; }
+  BS="$(git rev-parse HEAD)"
+  printf 'REVIEW_FINDING: severity=major structural=true region_lines=8 ref=review-1:3 | cross-module refactor needed\nREVIEW_RESULT: BLOCK structural\n' > "$D/repo/ctl/review.out"
+  printf 'echo "do_rework should NOT run" >&2; exit 9\n' > "$D/repo/ctl/do_rework"
+  st="$(gate_one docs/tdd/0099-fix.md "$BS" "$D/e2.log")"; rc=$?
+  F="$STATE_DIR/0099-fix.json"
+  [ "$rc" -ne 0 ] && ok "gate_one returns non-zero (blocked)" || bad "structural(c) should block (rc=$rc)"
+  ! grep -q '"outcome"' "$F" 2>/dev/null && ok "no rework_log entry (rework skipped)" || bad "structural(c) must not run a rework"
+  grep -q '"halt_cause":"structural-finding"' "$F" 2>/dev/null && ok "halt_cause=structural-finding" || bad "halt_cause should be structural-finding"
+  grep -qE '\(c\)' "$D/repo/docs/tdd/BLOCKERS.md" 2>/dev/null && ok "BLOCKERS.md names criterion (c)" || bad "BLOCKERS.md should name criterion (c) (got: $(cat "$D/repo/docs/tdd/BLOCKERS.md" 2>/dev/null))"
+) || true
+
+echo "[E3] oversized rework → rejected pre-ship → reset + rework-scope-exceeded"
+( D="$ROOT/E3"; mkdir -p "$D/state.d"
+  export STATE_DIR="$D/state.d" STATE_STARTED_AT=1000 STATE_MODE="sequential"
+  export INTEGRATION="master" CHANGE="ci" LOGDIR="$D" MAINREPO="$D/repo"
+  TDDS=()
+  THROUGHLINE_SOURCE_ONLY=1 source "$IMPL" || { bad "source guard missing"; exit 0; }
+  setup_loop_repo "$D/repo" || { bad "setup failed"; exit 0; }
+  BS="$(git rev-parse HEAD)"
+  printf 'REVIEW_FINDING: severity=major structural=false region_lines=8 ref=review-1:1 | small bug\nREVIEW_RESULT: BLOCK bug\n' > "$D/repo/ctl/review.out"
+  cat > "$D/repo/ctl/do_rework" <<'EOF'
+seq 1 200 > src/a.txt
+git add -A >/dev/null 2>&1; git commit -q -m "rework: oversized" >/dev/null 2>&1
+EOF
+  st="$(gate_one docs/tdd/0099-fix.md "$BS" "$D/e3.log")"; rc=$?
+  F="$STATE_DIR/0099-fix.json"
+  [ "$rc" -ne 0 ] && ok "gate_one returns non-zero (scope-rejected)" || bad "oversized rework should block (rc=$rc)"
+  grep -q '"outcome":"rejected:rework-scope-exceeded"' "$F" 2>/dev/null && ok "rework_log records rejected:rework-scope-exceeded" || bad "should record rejected:rework-scope-exceeded (got: $(_read_fragment_raw_array "$F" rework_log))"
+  grep -q '"halt_cause":"rework-scope-exceeded"' "$F" 2>/dev/null && ok "halt_cause=rework-scope-exceeded" || bad "halt_cause should be rework-scope-exceeded"
+  [ "$(git -C "$D/repo" rev-parse HEAD)" = "$BS" ] && ok "build branch HEAD reset to the prior cleared SHA" || bad "HEAD should be hard-reset to $BS (got $(git -C "$D/repo" rev-parse HEAD))"
+) || true
+
+echo "[E4] rework edits out-of-set file → structural(a) BLOCKED"
+( D="$ROOT/E4"; mkdir -p "$D/state.d"
+  export STATE_DIR="$D/state.d" STATE_STARTED_AT=1000 STATE_MODE="sequential"
+  export INTEGRATION="master" CHANGE="ci" LOGDIR="$D" MAINREPO="$D/repo"
+  TDDS=()
+  THROUGHLINE_SOURCE_ONLY=1 source "$IMPL" || { bad "source guard missing"; exit 0; }
+  setup_loop_repo "$D/repo" || { bad "setup failed"; exit 0; }
+  BS="$(git rev-parse HEAD)"
+  printf 'REVIEW_FINDING: severity=major structural=false region_lines=8 ref=review-1:1 | bug\nREVIEW_RESULT: BLOCK bug\n' > "$D/repo/ctl/review.out"
+  cat > "$D/repo/ctl/do_rework" <<'EOF'
+printf 'x\n' > src/out_of_scope.txt
+git add -A >/dev/null 2>&1; git commit -q -m "rework: out-of-set" >/dev/null 2>&1
+EOF
+  st="$(gate_one docs/tdd/0099-fix.md "$BS" "$D/e4.log")"; rc=$?
+  F="$STATE_DIR/0099-fix.json"
+  [ "$rc" -ne 0 ] && ok "gate_one returns non-zero (structural a)" || bad "out-of-set rework should block"
+  grep -q '"outcome":"rejected:structural-finding"' "$F" 2>/dev/null && ok "rework_log records rejected:structural-finding" || bad "should record rejected:structural-finding (got: $(_read_fragment_raw_array "$F" rework_log))"
+  grep -q '"halt_cause":"structural-finding"' "$F" 2>/dev/null && ok "halt_cause=structural-finding" || bad "halt_cause should be structural-finding"
+  grep -qE '\(a\)' "$D/repo/docs/tdd/BLOCKERS.md" 2>/dev/null && ok "BLOCKERS.md names criterion (a)" || bad "BLOCKERS.md should name criterion (a)"
+) || true
+
+echo "[E5] budget exhaustion → 3 ships then rework-budget-exhausted"
+( D="$ROOT/E5"; mkdir -p "$D/state.d"
+  export STATE_DIR="$D/state.d" STATE_STARTED_AT=1000 STATE_MODE="sequential"
+  export INTEGRATION="master" CHANGE="ci" LOGDIR="$D" MAINREPO="$D/repo"
+  export THROUGHLINE_REWORK_MAX=3
+  TDDS=()
+  THROUGHLINE_SOURCE_ONLY=1 source "$IMPL" || { bad "source guard missing"; exit 0; }
+  setup_loop_repo "$D/repo" || { bad "setup failed"; exit 0; }
+  BS="$(git rev-parse HEAD)"
+  # review ALWAYS blocks; each rework ships a clean small commit that does not
+  # resolve the finding (a new distinct line each call).
+  printf 'REVIEW_FINDING: severity=major structural=false region_lines=8 ref=review-1:1 | persistent bug\nREVIEW_RESULT: BLOCK persistent\n' > "$D/repo/ctl/review.out"
+  cat > "$D/repo/ctl/do_rework" <<'EOF'
+echo "tweak $(wc -l < src/a.txt)" >> src/a.txt
+git add -A >/dev/null 2>&1; git commit -q -m "rework: another small tweak" >/dev/null 2>&1
+EOF
+  st="$(gate_one docs/tdd/0099-fix.md "$BS" "$D/e5.log")"; rc=$?
+  F="$STATE_DIR/0099-fix.json"
+  [ "$rc" -ne 0 ] && ok "gate_one returns non-zero (budget exhausted)" || bad "budget exhaustion should block (rc=$rc)"
+  n="$(grep -oE '"outcome":"shipped"' "$F" | wc -l)"
+  [ "$n" -eq 3 ] && ok "exactly 3 shipped rework attempts" || bad "should ship exactly 3 reworks (got $n)"
+  grep -q '"halt_cause":"rework-budget-exhausted"' "$F" 2>/dev/null && ok "halt_cause=rework-budget-exhausted" || bad "halt_cause should be rework-budget-exhausted"
+  grep -q '"review:1":3' "$F" 2>/dev/null && ok "rework_attempts == {review:1:3}" || bad "rework_attempts should be review:1=3 (got: $(_read_fragment_raw_object "$F" rework_attempts))"
+) || true
+
 echo
 PASS="$(grep -c '^ok$'   "$RESULTS" 2>/dev/null)"; PASS="${PASS:-0}"
 FAIL="$(grep -c '^fail$' "$RESULTS" 2>/dev/null)"; FAIL="${FAIL:-0}"

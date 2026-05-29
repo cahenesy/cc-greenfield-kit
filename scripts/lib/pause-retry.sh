@@ -32,7 +32,7 @@ _recoverable_patterns() {
   # case-insensitive — claude / network errors arrive in mixed casing.
   cat <<'PATTERNS'
 ratelimit:(ratelimit|rate_limit|429 |too[- ]many[- ]requests)
-usage-limit:(usage[- ]limit|monthly[- ]limit[- ]reached|quota[- ]exceeded)
+usage-limit:(usage[- ]limit|monthly[- ]limit[- ]reached|quota[- ]exceeded|hit your session limit)
 transient:(connection[- ]reset|timed[- ]out|EAI_AGAIN|temporary failure|503 |502 |504 |gateway timeout)
 PATTERNS
 }

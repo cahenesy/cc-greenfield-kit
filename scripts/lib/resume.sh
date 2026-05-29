@@ -69,12 +69,18 @@ _update_paused_cause() {
   rework_attempts="$(_read_fragment_raw_object "$f" rework_attempts)"
   rework_log="$(_read_fragment_raw_array "$f" rework_log)"
   build_attempt="$(_read_fragment_raw_object "$f" build_attempt)"
+  # TDD 0020: carry the cleared-step fields forward (a paused_cause mutation on a
+  # refuse-to-resume path must not wipe last_cleared_review_sha / cleared_step_log).
+  local last_cleared_sha cleared_step_log
+  last_cleared_sha="$(_read_fragment_field "$f" last_cleared_review_sha)"
+  cleared_step_log="$(_read_fragment_raw_array "$f" cleared_step_log)"
   # TDD 0011 / iter-5 MAJOR-1: propagate write failures.
   if ! _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
     "${sta:-$(date +%s)}" "$(date +%s)" "$branch" "$pr_url" "$log_f" "$note" \
     "$new_cause" "$gates_csv" "$retries_json" "$branch_head" \
     "$halt_cause" "$halt_finding" "$halt_actions_csv" "$halt_detail" \
-    "$rework_attempts" "$rework_log" "$build_attempt"; then
+    "$rework_attempts" "$rework_log" "$build_attempt" \
+    "$last_cleared_sha" "$cleared_step_log"; then
     echo "error: _update_paused_cause: could not write $slug fragment (cause=$new_cause)" >&2
     return 1
   fi

@@ -126,18 +126,26 @@ json_escape() {
 #   build_attempt     a complete JSON object literal (or empty → null); holds
 #                     the original build attempt's token_spend for the FR-68
 #                     rework-vs-original comparison
-# Callers that do not need them omit them; the existing twelve-, sixteen-, and
-# twenty-param call sites continue to work unchanged (the new fields default to
-# null/[]/{}).
+# The two params 24..25 (TDD 0020 / FR-57, FR-59; ADR 0006) are likewise additive:
+#   last_cleared_review_sha   the head SHA the last per-step or consolidated
+#                             review pass cleared (or empty → JSON null)
+#   cleared_step_log          a complete JSON array literal (or empty → []);
+#                             per-cleared-step objects {step_id, base_sha,
+#                             head_sha, pattern_tags[], cleared_at}
+# Callers that do not need them omit them; the existing twelve-, sixteen-,
+# twenty-, and twenty-three-param call sites continue to work unchanged (the new
+# fields default to null/[]/{}).
 _write_tdd_fragment() {
   local slug="$1" n="$2" path="$3" qp="$4" status="$5" stage="$6" sta="$7" upd="$8"
   local branch="$9" pr_url="${10}" log="${11}" note="${12}"
   local paused_cause="${13:-}" gates_csv="${14:-}" retries_json="${15:-}" branch_head="${16:-}"
   local halt_cause="${17:-}" halt_finding="${18:-}" halt_actions_csv="${19:-}" halt_detail="${20:-}"
   local rework_attempts="${21:-}" rework_log="${22:-}" build_attempt="${23:-}"
+  local last_cleared_sha="${24:-}" cleared_step_log="${25:-}"
   local stage_lit cause_lit head_lit gates_lit retries_lit
   local halt_cause_lit halt_finding_lit halt_actions_lit halt_detail_lit
   local rework_attempts_lit rework_log_lit build_attempt_lit
+  local last_cleared_sha_lit cleared_step_log_lit
   if [ -z "$stage" ]; then stage_lit='null'
   else stage_lit="\"$(json_escape "$stage")\""; fi
   if [ -z "$paused_cause" ]; then cause_lit='null'
@@ -191,6 +199,12 @@ _write_tdd_fragment() {
   else rework_log_lit="$rework_log"; fi
   if [ -z "$build_attempt" ]; then build_attempt_lit='null'
   else build_attempt_lit="$build_attempt"; fi
+  # TDD 0020 cleared-step literals: SHA → quoted string or null; the
+  # cleared_step_log array → [] default. Callers pass a complete JSON array.
+  if [ -z "$last_cleared_sha" ]; then last_cleared_sha_lit='null'
+  else last_cleared_sha_lit="\"$(json_escape "$last_cleared_sha")\""; fi
+  if [ -z "$cleared_step_log" ]; then cleared_step_log_lit='[]'
+  else cleared_step_log_lit="$cleared_step_log"; fi
   # Split the `local` declaration: under bash 5.3 `set -u`, a single
   # `local f="..." tmp="$f..."` raises 'f: unbound variable' because the
   # `tmp` initializer references `$f` before the local declaration has bound
@@ -204,7 +218,7 @@ _write_tdd_fragment() {
   # fragment with a corrupted/empty one, and subsequent reads would
   # round-trip empty values back. Bail loudly instead so the run is
   # halted while data is still recoverable.
-  if ! printf '{"n":%d,"slug":"%s","path":"%s","queue_pos":%d,"status":"%s","stage":%s,"started_at":%d,"updated_at":%d,"branch":"%s","pr_url":"%s","log":"%s","note":"%s","paused_cause":%s,"gates_completed":%s,"retries":%s,"branch_head_at_pause":%s,"halt_cause":%s,"halt_triggering_finding_ref":%s,"halt_next_actions":%s,"halt_cause_detail":%s,"rework_attempts":%s,"rework_log":%s,"build_attempt":%s}\n' \
+  if ! printf '{"n":%d,"slug":"%s","path":"%s","queue_pos":%d,"status":"%s","stage":%s,"started_at":%d,"updated_at":%d,"branch":"%s","pr_url":"%s","log":"%s","note":"%s","paused_cause":%s,"gates_completed":%s,"retries":%s,"branch_head_at_pause":%s,"halt_cause":%s,"halt_triggering_finding_ref":%s,"halt_next_actions":%s,"halt_cause_detail":%s,"rework_attempts":%s,"rework_log":%s,"build_attempt":%s,"last_cleared_review_sha":%s,"cleared_step_log":%s}\n' \
     "$n" "$(json_escape "$slug")" "$(json_escape "$path")" "$qp" \
     "$(json_escape "$status")" "$stage_lit" \
     "$sta" "$upd" \
@@ -213,6 +227,7 @@ _write_tdd_fragment() {
     "$cause_lit" "$gates_lit" "$retries_lit" "$head_lit" \
     "$halt_cause_lit" "$halt_finding_lit" "$halt_actions_lit" "$halt_detail_lit" \
     "$rework_attempts_lit" "$rework_log_lit" "$build_attempt_lit" \
+    "$last_cleared_sha_lit" "$cleared_step_log_lit" \
     > "$tmp"; then
     echo "error: _write_tdd_fragment printf failed for $slug (disk full? perm?); fragment NOT updated" >&2
     rm -f "$tmp" 2>/dev/null || true
@@ -341,6 +356,16 @@ state_init() {
     # un-resumable, contradicting the dual-write/fallback backward-compat the TDD
     # exists to provide. The additive-compatible, resume-preserving resolution is
     # to NOT bump.)
+    #
+    # TDD 0020 (continuous review) §Data says "schema-version bumped by one"
+    # for the new last_cleared_review_sha / cleared_step_log fields. The
+    # SAME analysis applies: those fields are ADDITIVE (absent on an older
+    # fragment, both readers default — null and [] — so an old paused run
+    # resumes fine under the new code), and bumping under this `== 1` refusal
+    # gate would break resume of every pre-0020 paused run for no correctness
+    # gain. Following the TDD-0018 precedent, the schema stays at 1; the
+    # directive is satisfied in spirit (the change IS recorded — here) without
+    # the resume-breaking literal bump.
     local _resume_schema
     _resume_schema="$(sed -n 's/.*"schema":\([0-9]*\).*/\1/p' "$STATE_DIR/run.json" | head -1)"
     # TDD 0011 / iter-6 MAJOR-3: an absent/empty schema field is NOT
@@ -527,6 +552,13 @@ set_tdd_state() {
   rework_attempts="$(_read_fragment_raw_object "$f" rework_attempts)"
   rework_log="$(_read_fragment_raw_array "$f" rework_log)"
   build_attempt="$(_read_fragment_raw_object "$f" build_attempt)"
+  # TDD 0020: the cleared-step log + last-cleared SHA are cumulative across the
+  # whole TDD lifecycle (FR-57 anchors the next scoped diff; FR-59 counts
+  # addressed patterns), so — like the rework telemetry — they are ALWAYS carried
+  # forward and NEVER cleared by a status transition (resume reads them).
+  local last_cleared_sha cleared_step_log
+  last_cleared_sha="$(_read_fragment_field "$f" last_cleared_review_sha)"
+  cleared_step_log="$(_read_fragment_raw_array "$f" cleared_step_log)"
   if [ -n "$gate_done" ]; then
     case ",$gates_csv," in
       *",$gate_done,"*) : ;;  # already recorded; idempotent
@@ -553,7 +585,8 @@ set_tdd_state() {
     "${sta:-$now}" "$now" "$branch" "$pr_url" "$log" "$note" \
     "$paused_cause" "$gates_csv" "$retries_json" "$branch_head" \
     "$halt_cause" "$halt_finding" "$halt_actions_csv" "$halt_detail" \
-    "$rework_attempts" "$rework_log" "$build_attempt"; then
+    "$rework_attempts" "$rework_log" "$build_attempt" \
+    "$last_cleared_sha" "$cleared_step_log"; then
     echo "error: set_tdd_state: could not write $slug fragment (status=$status)" >&2
     return 1
   fi
@@ -599,6 +632,10 @@ set_tdd_meta() {
   rework_attempts="$(_read_fragment_raw_object "$f" rework_attempts)"
   rework_log="$(_read_fragment_raw_array "$f" rework_log)"
   build_attempt="$(_read_fragment_raw_object "$f" build_attempt)"
+  # TDD 0020: carry the cleared-step fields forward (set_tdd_meta never alters them).
+  local last_cleared_sha cleared_step_log
+  last_cleared_sha="$(_read_fragment_field "$f" last_cleared_review_sha)"
+  cleared_step_log="$(_read_fragment_raw_array "$f" cleared_step_log)"
   for kv in "$@"; do case "$kv" in
     branch=*) branch="${kv#branch=}" ;;
     pr_url=*) pr_url="${kv#pr_url=}" ;;
@@ -611,7 +648,8 @@ set_tdd_meta() {
     "${sta:-$now}" "$now" "$branch" "$pr_url" "$log" "$note" \
     "$paused_cause" "$gates_csv" "$retries_json" "$branch_head" \
     "$halt_cause" "$halt_finding" "$halt_actions_csv" "$halt_detail" \
-    "$rework_attempts" "$rework_log" "$build_attempt"; then
+    "$rework_attempts" "$rework_log" "$build_attempt" \
+    "$last_cleared_sha" "$cleared_step_log"; then
     echo "error: set_tdd_meta: could not write $slug fragment" >&2
     return 1
   fi
@@ -709,13 +747,19 @@ set_halt_cause() {
   rework_attempts="$(_read_fragment_raw_object "$f" rework_attempts)"
   rework_log="$(_read_fragment_raw_array "$f" rework_log)"
   build_attempt="$(_read_fragment_raw_object "$f" build_attempt)"
+  # TDD 0020: a halt write must NOT wipe the cleared-step log it may cite (the
+  # FR-59 cross-step-learning audit reads it post-halt) or the last-cleared SHA.
+  local last_cleared_sha cleared_step_log
+  last_cleared_sha="$(_read_fragment_field "$f" last_cleared_review_sha)"
+  cleared_step_log="$(_read_fragment_raw_array "$f" cleared_step_log)"
   if _is_paused_cause "$cause"; then paused_cause="$cause"; else paused_cause=""; fi
   now=$(date +%s)
   if ! _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
     "${sta:-$now}" "$now" "$branch" "$pr_url" "$log" "$note" \
     "$paused_cause" "$gates_csv" "$retries_json" "$branch_head" \
     "$cause" "$finding" "$actions_csv" "$detail" \
-    "$rework_attempts" "$rework_log" "$build_attempt"; then
+    "$rework_attempts" "$rework_log" "$build_attempt" \
+    "$last_cleared_sha" "$cleared_step_log"; then
     echo "error: set_halt_cause: could not write $slug fragment (cause=$cause)" >&2
     return 1
   fi
@@ -755,12 +799,18 @@ _rewrite_fragment_rework() {
   halt_finding="$(_read_fragment_field "$f" halt_triggering_finding_ref)"
   halt_actions_csv="$(_read_fragment_array_csv "$f" halt_next_actions)"
   halt_detail="$(_read_fragment_field "$f" halt_cause_detail)"
+  # TDD 0020: carry the cleared-step fields forward (a rework-telemetry rewrite
+  # must not wipe last_cleared_review_sha / cleared_step_log).
+  local last_cleared_sha cleared_step_log
+  last_cleared_sha="$(_read_fragment_field "$f" last_cleared_review_sha)"
+  cleared_step_log="$(_read_fragment_raw_array "$f" cleared_step_log)"
   now=$(date +%s)
   if ! _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
     "${sta:-$now}" "$now" "$branch" "$pr_url" "$log" "$note" \
     "$paused_cause" "$gates_csv" "$retries_json" "$branch_head" \
     "$halt_cause" "$halt_finding" "$halt_actions_csv" "$halt_detail" \
-    "$ra_lit" "$rl_lit" "$ba_lit"; then
+    "$ra_lit" "$rl_lit" "$ba_lit" \
+    "$last_cleared_sha" "$cleared_step_log"; then
     echo "error: _rewrite_fragment_rework: could not write $slug fragment" >&2
     return 1
   fi
@@ -902,4 +952,94 @@ _set_build_attempt_token_spend() {  # <slug> <value>
   ra="$(_read_fragment_raw_object "$f" rework_attempts)"; [ -z "$ra" ] && ra='{}'
   rl="$(_read_fragment_raw_array "$f" rework_log)"
   _rewrite_fragment_rework "$slug" "$ra" "$rl" "{\"token_spend\":$val_lit}"
+}
+
+# --- Cleared-step log + last-cleared SHA (TDD 0020 / FR-57, FR-59; ADR 0006) --
+# _record_cleared_step <slug> <step-id> <base-sha> <head-sha> <pattern-tags-csv>
+# Append one {step_id, base_sha, head_sha, pattern_tags[], cleared_at} entry to
+# cleared_step_log and advance last_cleared_review_sha to <head-sha>, atomically.
+# Every OTHER field is read from the existing fragment and round-tripped unchanged
+# (the same read-all/write-all discipline every fragment mutator uses). The pair
+# makes any review verdict reproducible from `git diff <base>..<head>` of a
+# recorded entry (ADR 0006); the pattern_tags feed the FR-59 cross-step-learning
+# acceptance. <pattern-tags-csv> is a comma-separated tag list (or empty → []);
+# each tag is JSON-escaped. The cleared_step_log is bounded (≤ Sequencing items,
+# plus resume re-appends — §Failure modes), so size is not a concern.
+_record_cleared_step() {  # <slug> <step-id> <base-sha> <head-sha> <pattern-tags-csv>
+  local slug="$1" step_id="$2" base_sha="$3" head_sha="$4" tags_csv="${5:-}"
+  local f="${STATE_DIR:-}/$slug.json"
+  if [ -z "${STATE_DIR:-}" ] || [ ! -f "$f" ]; then
+    echo "error: _record_cleared_step: no state fragment for $slug ($f)" >&2
+    return 1
+  fi
+  # step_id is numeric (the Sequencing item index); guard it so a malformed
+  # value cannot corrupt the JSON literal. An empty/non-numeric id collapses to 0.
+  case "$step_id" in ''|*[!0-9]*) step_id=0 ;; esac
+  # Build the pattern_tags JSON array from the CSV (comma-free tags by
+  # construction — the reviewer emits short categorical labels).
+  local tags_lit t first=1
+  if [ -z "$tags_csv" ]; then
+    tags_lit='[]'
+  else
+    tags_lit='['
+    local IFS=','; for t in $tags_csv; do
+      if [ -n "$t" ]; then
+        if [ "$first" -eq 1 ]; then tags_lit+="\"$(json_escape "$t")\""; first=0
+        else tags_lit+=",\"$(json_escape "$t")\""; fi
+      fi
+    done
+    tags_lit+=']'
+  fi
+  local now entry; now=$(date +%s)
+  entry="{\"step_id\":$step_id,\"base_sha\":\"$(json_escape "$base_sha")\",\"head_sha\":\"$(json_escape "$head_sha")\",\"pattern_tags\":$tags_lit,\"cleared_at\":$now}"
+  # Append to the existing log (bounded; §Data). Splice before the closing
+  # bracket; entries contain nested arrays but no nested top-level brackets that
+  # would confuse a `%]}` strip, so the splice is unambiguous on a well-formed
+  # `]`-terminated array.
+  local existing new
+  existing="$(_read_fragment_raw_array "$f" cleared_step_log)"
+  if [ -z "$existing" ] || [ "$existing" = "[]" ]; then
+    new="[$entry]"
+  elif [ "${existing: -1}" != ']' ]; then
+    echo "warning: cleared_step_log for $slug was malformed (no closing ']'); resetting" >&2
+    new="[$entry]"
+  else
+    new="${existing%]},$entry]"
+  fi
+  # Read-all/write-all: carry every other field forward unchanged.
+  local n qp path status stage sta branch pr_url log note
+  local paused_cause gates_csv retries_json branch_head
+  local halt_cause halt_finding halt_actions_csv halt_detail
+  local rework_attempts rework_log build_attempt
+  n="$(sed -n 's/.*"n":\([0-9]*\).*/\1/p'            "$f" | head -1)"
+  qp="$(sed -n 's/.*"queue_pos":\([0-9]*\).*/\1/p'   "$f" | head -1)"
+  path="$(sed -n 's/.*"path":"\([^"]*\)".*/\1/p'     "$f" | head -1)"
+  status="$(sed -n 's/.*"status":"\([^"]*\)".*/\1/p' "$f" | head -1)"
+  if grep -q '"stage":null' "$f" 2>/dev/null; then stage=""
+  else stage="$(sed -n 's/.*"stage":"\([^"]*\)".*/\1/p' "$f" | head -1)"; fi
+  sta="$(sed -n 's/.*"started_at":\([0-9]*\).*/\1/p' "$f" | head -1)"
+  branch="$(sed -n 's/.*"branch":"\([^"]*\)".*/\1/p' "$f" | head -1)"
+  pr_url="$(sed -n 's/.*"pr_url":"\([^"]*\)".*/\1/p' "$f" | head -1)"
+  log="$(sed -n 's/.*"log":"\([^"]*\)".*/\1/p'       "$f" | head -1)"
+  note="$(sed -n 's/.*"note":"\([^"]*\)".*/\1/p'     "$f" | head -1)"
+  paused_cause="$(_read_fragment_field "$f" paused_cause)"
+  gates_csv="$(_read_fragment_array_csv "$f" gates_completed)"
+  retries_json="$(_read_fragment_raw_array "$f" retries)"
+  branch_head="$(_read_fragment_field "$f" branch_head_at_pause)"
+  halt_cause="$(_read_fragment_field "$f" halt_cause)"
+  halt_finding="$(_read_fragment_field "$f" halt_triggering_finding_ref)"
+  halt_actions_csv="$(_read_fragment_array_csv "$f" halt_next_actions)"
+  halt_detail="$(_read_fragment_field "$f" halt_cause_detail)"
+  rework_attempts="$(_read_fragment_raw_object "$f" rework_attempts)"
+  rework_log="$(_read_fragment_raw_array "$f" rework_log)"
+  build_attempt="$(_read_fragment_raw_object "$f" build_attempt)"
+  if ! _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
+    "${sta:-$now}" "$now" "$branch" "$pr_url" "$log" "$note" \
+    "$paused_cause" "$gates_csv" "$retries_json" "$branch_head" \
+    "$halt_cause" "$halt_finding" "$halt_actions_csv" "$halt_detail" \
+    "$rework_attempts" "$rework_log" "$build_attempt" \
+    "$head_sha" "$new"; then
+    echo "error: _record_cleared_step: could not write $slug fragment (step $step_id)" >&2
+    return 1
+  fi
 }

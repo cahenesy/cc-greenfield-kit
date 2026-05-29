@@ -115,7 +115,9 @@ echo "[A5] set_tdd_state / set_tdd_meta carry the new fields forward"
   TDDS=()
   THROUGHLINE_SOURCE_ONLY=1 source "$IMPL" || { bad "source guard missing"; exit 0; }
   _write_tdd_fragment 0020-x 20 docs/tdd/0020-x.md 1 reviewing review \
-    1000 1000 "feat/0020-x" "" "log" "" "" "" "" "" "" "" "" "" "" \
+    1000 1000 "feat/0020-x" "" "log" "" "" "" "" "" \
+    "" "" "" "" \
+    "" "" "" \
     "ccc333" '[{"step_id":1,"base_sha":"a","head_sha":"ccc333","pattern_tags":[],"cleared_at":1}]'
   set_tdd_state 0020-x reviewing flip
   F="$D/state.d/0020-x.json"
@@ -137,7 +139,9 @@ echo "[A6] set_halt_cause / _append_retry / _enter_paused carry the new fields f
   TDDS=()
   THROUGHLINE_SOURCE_ONLY=1 source "$IMPL" || { bad "source guard missing"; exit 0; }
   _write_tdd_fragment 0020-x 20 docs/tdd/0020-x.md 1 blocked review \
-    1000 1000 "feat/0020-x" "" "log" "" "" "" "" "" "" "" "" "" "" \
+    1000 1000 "feat/0020-x" "" "log" "" "" "" "" "" \
+    "" "" "" "" \
+    "" "" "" \
     "ddd444" '[{"step_id":1,"base_sha":"a","head_sha":"ddd444","pattern_tags":[],"cleared_at":1}]'
   F="$D/state.d/0020-x.json"
   set_halt_cause 0020-x rework-budget-exhausted "review:1"

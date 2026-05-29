@@ -65,6 +65,14 @@ if printf '%s' "$prompt" | grep -q 'INDEPENDENT review gate'; then
   cat "$STUBDIR/review-$slug" 2>/dev/null || echo "REVIEW_RESULT: PASS"
   exit 0
 fi
+# TDD 0019 bounded rework loop: a review BLOCK triggers a rework pass. The
+# default rework is a no-op (empty diff) so the loop exhausts its attempt
+# budget and the TDD halts BLOCKED with rework-budget-exhausted — scenarios
+# that want a real fix supply $STUBDIR/rework-$slug.
+if printf '%s' "$prompt" | grep -q 'BOUNDED rework pass'; then
+  bash "$STUBDIR/rework-$slug" 2>/dev/null || true
+  exit 0
+fi
 # failing-test-first commit, unless this scenario suppresses it
 if [ ! -f "$STUBDIR/no-test-first-$slug" ]; then
   echo "test for $slug" >> "test-$slug.txt"
@@ -105,13 +113,17 @@ echo "[B] ci-checks gate: tests red -> NOT implemented"
   has "$R" "FAIL verification" "report shows verification failure"
 ) || true
 
-echo "[C] review gate: review BLOCK -> NOT implemented"
+echo "[C] review gate: persistent review BLOCK -> bounded rework exhausts -> NOT implemented"
 ( setup "$ROOT/c" 1
+  # Review always blocks and the default rework is a no-op (empty diff), so the
+  # bounded loop ships nothing, exhausts its attempt budget (TDD 0019 / FR-65),
+  # and the TDD halts BLOCKED — never flipped (ADR 0007 supersedes first-failure
+  # halt; a review BLOCK now drives the rework loop, not an immediate FAIL).
   printf 'REVIEW_RESULT: BLOCK found a real bug\n' > "$STUBDIR/review-0001-alpha"
-  bash "$IMPL" --change ci >/dev/null 2>&1
+  THROUGHLINE_REWORK_MAX=2 bash "$IMPL" --change ci >/dev/null 2>&1
   R="$(report)"
   [ "$(status_on docs/tdd/0001-alpha.md ci/0001-alpha)" = ready ] && ok "TDD left ready (review blocked flip)" || bad "TDD must stay ready when review blocks (got '$(status_on docs/tdd/0001-alpha.md ci/0001-alpha)')"
-  has "$R" "FAIL review" "report shows review block"
+  has "$R" "BLOCKED review" "report shows the rework loop halted the review gate"
 ) || true
 
 echo "[D] downstream halt: first TDD fails verify -> second BLOCKED, not attempted"

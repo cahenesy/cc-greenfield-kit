@@ -403,3 +403,126 @@ _rework_one() {  # <tdd> <log> <finding-ref> <finding-text> <cap>
   record_session_pointer "$log" "$start"
   git rev-parse HEAD 2>/dev/null
 }
+
+# _rework_extract_finding <review-log>  — set RWK_STRUCTURAL / RWK_REGION /
+# RWK_REF / RWK_TEXT for the FIRST halting finding in the review output. TDD 0021
+# adds a structured `REVIEW_FINDING: severity=… structural=… region_lines=… ref=…
+# | <text>` line per finding; this consumes it. Pre-TDD-0021 the review prompt
+# emits no such marker, so the loop degrades safely: structural=0 (no predictive
+# (c) escalation), region empty (cap collapses to the floor), ref `review:1`,
+# and the BLOCK reason as the finding text — the retrospective (a)/(b) checks and
+# the attempt budget still apply in full.
+_rework_extract_finding() {  # <review-log>
+  local log="$1" line r
+  RWK_STRUCTURAL=0; RWK_REGION=""; RWK_REF="review:1"; RWK_TEXT=""
+  line="$(grep -aE '^REVIEW_FINDING:' "$log" 2>/dev/null | grep -aiE 'severity=(blocker|major)' | tail -1)"
+  if [ -n "$line" ]; then
+    case "$line" in *structural=true*) RWK_STRUCTURAL=1 ;; esac
+    RWK_REGION="$(printf '%s' "$line" | sed -n 's/.*region_lines=\([0-9]*\).*/\1/p')"
+    r="$(printf '%s' "$line" | sed -n 's/.*ref=\([^ ]*\).*/\1/p')"; [ -n "$r" ] && RWK_REF="$r"
+    case "$line" in *'| '*) RWK_TEXT="${line#*| }" ;; *) RWK_TEXT="$line" ;; esac
+  else
+    RWK_TEXT="$(grep -aoE 'REVIEW_RESULT: BLOCK.*' "$log" 2>/dev/null | tail -1 | sed 's/REVIEW_RESULT: BLOCK *//')"
+    [ -z "$RWK_TEXT" ] && RWK_TEXT="review-blocking finding (no structured detail)"
+  fi
+}
+
+# _rework_escalate <slug> <tdd> <gate> <step> <cause> <finding-ref> <criterion> <excerpt>
+# Record a halt (TDD 0018's set_halt_cause) and append a structured design-level
+# entry to docs/tdd/BLOCKERS.md (FR-67 / ADR 0007) naming the gate-step pair, the
+# structural criterion that fired, and a one-line finding excerpt.
+_rework_escalate() {  # <slug> <tdd> <gate> <step> <cause> <ref> <criterion> <excerpt>
+  local slug="$1" tdd="$2" gate="$3" step="$4" cause="$5" ref="$6" crit="$7" excerpt="$8"
+  set_halt_cause "$slug" "$cause" "$ref" "$crit" \
+    || echo "warning: _rework_escalate: set_halt_cause failed for $slug ($cause)" >&2
+  record_blocker "$tdd" "$gate:$step $cause $crit — $(printf '%s' "$excerpt" | head -c 200)"
+}
+
+# _rework_loop <slug> <tdd> <rbase> <log>  — the bounded automatic rework loop
+# (FR-61, FR-62, FR-65, FR-66, FR-67). Runs the review gate; on a PASS verdict
+# returns 0 (converged). On a halting finding it either escalates (structural
+# (c)/(a)/(b) or budget) → records the halt + BLOCKERS entry + a blocked terminal
+# state and returns 1, or runs one bounded rework on Sonnet, mechanically
+# pre-passes the commit, and re-runs the review against the new diff. A transient
+# pause during review returns 2 (the caller maps it to the paused halt). The user
+# is never asked to drive between a finding and convergence/escalation (FR-61).
+#   rbase — the build-start SHA (review diff base + the §5 cleared-SHA fallback
+#           and the FR-67(b) cumulative base).
+_rework_loop() {  # <slug> <tdd> <rbase> <log>
+  local slug="$1" tdd="$2" rbase="$3" log="$4"
+  local gate="review" step="${THROUGHLINE_REWORK_STEP:-1}"
+  local max="${THROUGHLINE_REWORK_MAX:-3}"; case "$max" in ''|*[!0-9]*) max=3 ;; esac
+  local build_start="$rbase" cleared attempts=0 rrc rs _retries_json
+  cleared="$(git rev-parse HEAD 2>/dev/null || echo "$rbase")"
+  while true; do
+    _retry_in_gate _review_one_gated "$gate" "$slug" "$log" "$tdd" "$rbase" "$log"
+    rrc=$?
+    [ "$rrc" -eq 2 ] && return 2          # transient pause (NFR-4: not a fail)
+    _retries_json="$(_read_fragment_raw_array "${STATE_DIR:-}/$slug.json" retries 2>/dev/null)"
+    if [ "$rrc" -ne 0 ] && [ -n "$_retries_json" ] && [ "$_retries_json" != "[]" ]; then
+      _terminal_state "$slug" failed "" "review gate fatal exit after retries (rc=$rrc)"
+      return 1
+    fi
+    rs="$(review_status "$log")"
+    case "$rs" in
+      *PASS*)  return 0 ;;
+      *BLOCK*) : ;;
+      *) _terminal_state "$slug" failed "" "review: no REVIEW_RESULT line"; return 1 ;;
+    esac
+
+    # A halting finding (FR-58 blocker/major) → classify and act.
+    _rework_extract_finding "$log"
+    # FR-67(c): reviewer explicitly tagged it structural → no rework.
+    if [ "${RWK_STRUCTURAL:-0}" = "1" ]; then
+      _rework_escalate "$slug" "$tdd" "$gate" "$step" structural-finding "$RWK_REF" "(c)" "$RWK_TEXT"
+      _terminal_state "$slug" blocked "" "structural-finding(c): $RWK_TEXT"
+      return 1
+    fi
+    # FR-65: per-(gate,step) attempt budget. Exhausted BEFORE a further rework
+    # (so the counter caps at THROUGHLINE_REWORK_MAX, never over).
+    if [ "$attempts" -ge "$max" ]; then
+      _rework_escalate "$slug" "$tdd" "$gate" "$step" rework-budget-exhausted "$RWK_REF" "budget" "rework budget $max exhausted at $gate:$step"
+      _terminal_state "$slug" blocked "" "rework-budget-exhausted at $gate:$step (budget $max)"
+      return 1
+    fi
+
+    # One bounded rework attempt (FR-62).
+    attempts="$(_rework_attempt_count "$slug" "$gate" "$step")"
+    local cap _start _fin new_head spend
+    cap="$(_rework_scope_cap "$RWK_REGION")"
+    cleared="$(git rev-parse HEAD 2>/dev/null || echo "$cleared")"
+    _start=$(date +%s)
+    new_head="$(_rework_one "$tdd" "$log" "$RWK_REF" "$RWK_TEXT" "$cap")"
+    _fin=$(date +%s)
+    spend="$(_extract_token_spend "$(_last_session_path "$_start")")"
+    local model="${THROUGHLINE_REWORK_MODEL:-sonnet}"
+
+    # Empty/no-commit rework (§Failure modes): record empty-diff, do not reset,
+    # let the next review pass re-block (and eventually exhaust the budget).
+    if [ -z "$new_head" ] || [ "$new_head" = "$cleared" ]; then
+      _record_rework_attempt "$slug" "$attempts" "$gate" "$step" "$model" "$spend" "$_start" "$_fin" "$RWK_REF" "empty-diff"
+      continue
+    fi
+
+    # FR-66 + FR-67(a)/(b) mechanical pre-pass against the rework commit.
+    local pp pprc cause crit
+    pp="$(_rework_pre_pass "$slug" "$tdd" "$new_head" "$cleared" "$build_start" "$RWK_REGION")"; pprc=$?
+    if [ "$pprc" -ne 0 ]; then
+      case "$pp" in
+        *rework-scope-exceeded*)   cause=rework-scope-exceeded; crit="scope" ;;
+        *"structural-finding(a)"*) cause=structural-finding;    crit="(a)" ;;
+        *"structural-finding(b)"*) cause=structural-finding;    crit="(b)" ;;
+        *)                         cause=structural-finding;    crit="(?)" ;;
+      esac
+      _record_rework_attempt "$slug" "$attempts" "$gate" "$step" "$model" "$spend" "$_start" "$_fin" "$RWK_REF" "rejected:$cause"
+      git reset --hard "$cleared" >>"$log" 2>&1   # hard-reset the rejected rework off the branch
+      _rework_escalate "$slug" "$tdd" "$gate" "$step" "$cause" "$RWK_REF" "$crit" "$(printf '%s\n' "$pp" | head -1)"
+      _terminal_state "$slug" blocked "" "$cause $crit (rework rejected pre-ship)"
+      return 1
+    fi
+
+    # Shipped: advance the cleared SHA and re-review the new diff.
+    _record_rework_attempt "$slug" "$attempts" "$gate" "$step" "$model" "$spend" "$_start" "$_fin" "$RWK_REF" "shipped"
+    cleared="$new_head"
+  done
+}

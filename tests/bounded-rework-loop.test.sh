@@ -520,6 +520,10 @@ setup_loop_repo() {  # <dir>  (caller exports STATE_DIR etc. + sources $IMPL fir
   cd "$d" || return 1
   git init -q -b master; git config user.email t@t.t; git config user.name t
   mkdir -p src docs/tdd
+  # ctl/ + bin/ are test scaffolding, not part of the build — keep them out of
+  # git so a rework's `git add -A` never sweeps them into the commit (which
+  # would falsely trip the FR-67(a) out-of-set check).
+  printf 'ctl/\nbin/\n' > .gitignore
   printf 'orig\n' > src/a.txt
   cat > docs/tdd/0099-fix.md <<'EOF'
 # TDD 0099: fixture

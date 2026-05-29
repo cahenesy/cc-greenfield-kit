@@ -368,29 +368,27 @@ gate_one() {  # <tdd> <review-base-ref> <log>
     esac
   fi
 
-  # --- Gate 4: review (LLM-driven; retry-eligible) -------------------------
+  # --- Gate 4: review + bounded rework loop (TDD 0019 / FR-61, FR-62) -------
+  # Per ADR 0007 a review BLOCK no longer halts on first failure: a halting
+  # finding (FR-58) triggers the bounded automatic rework loop in this same
+  # invocation. _rework_loop runs the review, and on a halting finding either
+  # escalates (structural / budget-exhausted → records halt + BLOCKERS entry +
+  # blocked terminal state) or runs one bounded Sonnet rework + mechanical
+  # pre-pass and re-reviews — converging or escalating without user input.
   if ! _is_done review; then
     set_tdd_state "$slug" reviewing review
-    _retry_in_gate _review_one_gated review "$slug" "$log" "$tdd" "$rbase" "$log"
+    _rework_loop "$slug" "$tdd" "$rbase" "$log"
     rrc=$?
-    # TDD 0011 / MAJOR-4: paused short-circuit before verdict scan (see
-    # gate 3 above + BL-1).
-    if [ "$rrc" -eq 2 ]; then
-      echo "PAUSED review"; return 2; fi
-    # TDD 0011 / iter-6 MAJOR-1: same retries-proxy as gates 1 and 3.
-    _retries_json="$(_read_fragment_raw_array "${STATE_DIR:-}/$slug.json" retries 2>/dev/null)"
-    if [ "$rrc" -ne 0 ] && [ -n "$_retries_json" ] && [ "$_retries_json" != "[]" ]; then
-      _terminal_state "$slug" failed "" "review gate fatal exit after retries (rc=$rrc)"
-      echo "FAIL review (fatal exit after retries; see log)"; return 1
-    fi
-    rs="$(review_status "$log")"
-    case "$rs" in
-      *PASS*) set_tdd_state "$slug" reviewing review "" review \
-                || echo "warning: gate_one: could not record review completion for $slug" >&2 ;;
-      *BLOCK*) _terminal_state "$slug" failed "" "review BLOCK"
-               echo "FAIL review:${rs#*BLOCK}"; return 1 ;;
-      *) _terminal_state "$slug" failed "" "review: no REVIEW_RESULT line"
-         echo "FAIL review (no REVIEW_RESULT; see log)"; return 1 ;;
+    case "$rrc" in
+      0) set_tdd_state "$slug" reviewing review "" review \
+           || echo "warning: gate_one: could not record review completion for $slug" >&2 ;;
+      2) echo "PAUSED review"; return 2 ;;
+      *) # _rework_loop already recorded the halt cause + BLOCKERS entry +
+         # blocked/failed terminal state; surface a one-line verdict for the
+         # report from the fragment's recorded cause.
+         local _hc; _hc="$(_read_fragment_field "${STATE_DIR:-}/$slug.json" halt_cause 2>/dev/null)"
+         if [ -n "$_hc" ]; then echo "BLOCKED review ($_hc)"; else echo "FAIL review (see log)"; fi
+         return 1 ;;
     esac
   fi
 

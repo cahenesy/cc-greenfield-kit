@@ -1,6 +1,6 @@
 # TDD 0017: Theme D refactor (3/3) — extract gate executors and resume orchestration into `scripts/lib/{gates,resume}.sh`
 
-Status: draft
+Status: implemented
 PRD refs: FR-69 (slice 3/3)
 PRD-rev: a961955
 ADR constraints: 0003, 0004, 0005

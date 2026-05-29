@@ -112,6 +112,13 @@ echo "[2.a] _classify_cause maps each documented stderr pattern to its cause"
   [ "$(_classify_cause "$L" 0)" = "usage-limit" ] && ok "monthly-limit-reached -> usage-limit" \
     || bad "monthly-limit should classify as usage-limit"
 
+  # Claude Code's actual subscription-session-cap message — the exact wording
+  # that bypassed the classifier on a real 0020 build (May 2026) and forced
+  # a manual paused-state mutation. Recover-cause classifier must catch it.
+  printf "You've hit your session limit · resets 6:30pm (America/New_York)\n" > "$L"
+  [ "$(_classify_cause "$L" 0)" = "usage-limit" ] && ok "claude-code session limit -> usage-limit" \
+    || bad "claude-code 'hit your session limit' should classify as usage-limit"
+
   printf 'connection reset by peer\n' > "$L"
   [ "$(_classify_cause "$L" 0)" = "transient" ] && ok "connection reset -> transient" \
     || bad "connection reset should classify as transient"

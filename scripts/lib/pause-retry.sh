@@ -333,13 +333,23 @@ _append_retry() {
 # .jsonl in the cwd-encoded project dir, modified at or after the call started)
 # and appends a `THROUGHLINE_SESSION:` pointer plus the last few tool calls to
 # the log, so a FAIL like that is diagnosable from the log itself.
-record_session_pointer() {  # <log> <start-epoch>
-  local log="$1" start="$2" enc proj sess
+# _last_session_path <start-epoch>  — echo the path of the newest `claude -p`
+# session JSONL written at/after <start-epoch> for the current cwd (resolved via
+# Claude Code's project-dir encoding: /a/b → ~/.claude/projects/-a-b/). Echoes
+# nothing when the project dir or a fresh session is absent. Shared by
+# record_session_pointer (FR-36) and the FR-68 token-spend extraction so both
+# find the same session.
+_last_session_path() {  # <start-epoch>
+  local start="$1" enc proj
   enc="$(printf '%s' "$PWD" | sed 's|/|-|g')"
   proj="$HOME/.claude/projects/$enc"
   [ -d "$proj" ] || return 0
-  sess="$(find "$proj" -maxdepth 1 -name "*.jsonl" -newermt "@$start" -printf '%T@\t%p\n' 2>/dev/null \
-            | sort -rn | head -1 | cut -f2)"
+  find "$proj" -maxdepth 1 -name "*.jsonl" -newermt "@$start" -printf '%T@\t%p\n' 2>/dev/null \
+    | sort -rn | head -1 | cut -f2
+}
+record_session_pointer() {  # <log> <start-epoch>
+  local log="$1" start="$2" sess
+  sess="$(_last_session_path "$start")"
   [ -n "$sess" ] || return 0
   {
     echo

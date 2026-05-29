@@ -27,6 +27,16 @@ build_one() {  # <tdd> <log>
   local start _rc; start=$(date +%s); _rc=0
   claude "${args[@]}" >>"$log" 2>&1; _rc=$?
   record_session_pointer "$log" "$start"
+  # TDD 0019 / FR-68: record the original-build token spend on the fragment so
+  # the rework-vs-original comparison is derivable from run-state alone. Reads
+  # the same session JSONL record_session_pointer found; `null` when jq is
+  # absent or no usage is present (acceptable — FR-68 is observability, not a
+  # hard cap). Guarded so the SOURCE_ONLY test path (no fragment) is a no-op.
+  if [ -n "${STATE_DIR:-}" ]; then
+    local _slug; _slug="$(basename "$tdd" .md)"
+    [ -f "$STATE_DIR/$_slug.json" ] && \
+      _set_build_attempt_token_spend "$_slug" "$(_extract_token_spend "$(_last_session_path "$start")")"
+  fi
   return "$_rc"   # TDD 0011 / BL-2: preserve claude's exit code (incl. signals like 143)
 }
 review_one() {  # <tdd> <base-ref> <log>

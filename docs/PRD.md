@@ -313,16 +313,35 @@ think about).
 - **FR-40 Gate-level resume.** On resume, the runner continues the interrupted
   TDD at the first of the four gates (FR-15) that did not complete; gates that
   did complete are not re-run. The persisted run-state record (FR-27) is the
-  source of truth for which gates completed; the build branch's committed
-  history is the source of truth for the build gate's output (so the resumed
-  later gates run against the same on-disk state the interrupted run left, not
-  against untrusted in-flight worktree edits). — Acceptance: a TDD
-  interrupted after gate 2 (ci-checks.sh) and before gate 3 (runtime-verify),
-  when resumed, produces no new gate-1 or gate-2 output in the per-TDD log
-  between the resume timestamp and the runtime-verify output; the resumed
-  TDD's build branch HEAD contains the same gate-1 commits as before the
-  interruption, with only the resumed-from gate's downstream commits (if any)
-  added.
+  source of truth for which gates completed — including the build gate, whose
+  completion is recorded only when the build's terminal sentinel
+  `BATCH_RESULT: OK` (FR-15) is observed for that TDD's build attempt. Partial
+  commits on the build branch (one or more `test(failing):` + `feat:` pairs
+  that landed before an interruption) are NOT evidence of build-gate
+  completion; an inferred-from-commits proxy contradicts this requirement and
+  is not permitted. The build branch's committed history is the source of
+  truth for the build gate's *output content* (what code was implemented), so
+  resumed gates run against the same on-disk state the interrupted run left,
+  not against untrusted in-flight worktree edits. On intra-gate (mid-build)
+  interruption with a recoverable cause (FR-41), the build gate re-runs from
+  the current branch state on resume; the build prompt is idempotent at the
+  prompt level — it reads the existing commit history and either no-ops on
+  already-completed sequencing steps or extends with the remaining ones. —
+  Acceptance: (a) **Inter-gate resume.** A TDD interrupted after gate 2
+  (ci-checks.sh) and before gate 3 (runtime-verify), when resumed, produces
+  no new gate-1 or gate-2 output in the per-TDD log between the resume
+  timestamp and the runtime-verify output; the resumed TDD's build branch
+  HEAD contains the same gate-1 commits as before the interruption, with
+  only the resumed-from gate's downstream commits (if any) added.
+  (b) **Intra-build resume.** A TDD whose build process is interrupted by
+  a recoverable cause (FR-41) after committing one or more `test(failing):`
+  + `feat:` pairs but before emitting `BATCH_RESULT: OK` leaves the per-TDD
+  fragment's `gates_completed` field without `build`; on `/implement
+  --resume` the build gate re-runs (its log shows new build output between
+  the resume timestamp and the next gate's verdict); the pre-resume
+  commits are preserved unchanged on the build branch and the resumed
+  build either no-ops on them or extends with the remaining sequencing
+  steps to produce `BATCH_RESULT: OK`.
 - **FR-41 Recoverable-cause classification.** The runner distinguishes
   recoverable causes (usage-limit / ratelimit, transient network/API error)
   from fatal causes (genuine FAIL verdict, malformed verdict, unexpected

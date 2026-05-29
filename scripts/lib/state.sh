@@ -800,7 +800,7 @@ _rework_attempt_count() {  # <slug> <gate> <step>
     echo "error: _rework_attempt_count: no state fragment for $slug ($f)" >&2
     return 1
   fi
-  local key="$gate:$step" obj cur new_obj
+  local key="$gate:$step" obj cur new new_obj
   obj="$(_read_fragment_raw_object "$f" rework_attempts)"
   [ -z "$obj" ] && obj='{}'
   # Current count for this key (0 if absent). The key is well-formed

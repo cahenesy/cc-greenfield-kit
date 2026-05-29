@@ -415,11 +415,16 @@ _rework_one() {  # <tdd> <log> <finding-ref> <finding-text> <cap>
   touched_block="$(_rework_touched_files "$tdd" | sed 's/^/  - /')"
   # Literal placeholder substitution via bash parameter expansion (safe for the
   # finding text's `/`, `#`, and newlines, which would break sed delimiters).
+  # Order matters: substitute the LLM-derived $finding_text last so a finding
+  # containing literal `{{CAP}}` / `{{TOUCHED_FILES}}` / `{{TDD}}` cannot get
+  # double-substituted into the assembled prompt. None of those values permit
+  # command injection (cap is decimal, touched_block is internal, tdd is a path),
+  # but a double-substituted prompt would be semantically wrong.
   prompt="$(cat "$tmpl")"
   prompt="${prompt//\{\{TDD\}\}/$tdd}"
-  prompt="${prompt//\{\{FINDING\}\}/[$finding_ref] $finding_text}"
   prompt="${prompt//\{\{CAP\}\}/$cap}"
   prompt="${prompt//\{\{TOUCHED_FILES\}\}/$touched_block}"
+  prompt="${prompt//\{\{FINDING\}\}/[$finding_ref] $finding_text}"
   local args=(-p "$prompt" --permission-mode auto)
   [ -n "$rm" ] && args+=(--model "$rm")
   local start; start=$(date +%s)
@@ -459,7 +464,13 @@ _rework_escalate() {  # <slug> <tdd> <gate> <step> <cause> <ref> <criterion> <ex
   local slug="$1" tdd="$2" gate="$3" step="$4" cause="$5" ref="$6" crit="$7" excerpt="$8"
   set_halt_cause "$slug" "$cause" "$ref" "$crit" \
     || echo "warning: _rework_escalate: set_halt_cause failed for $slug ($cause)" >&2
-  record_blocker "$tdd" "$gate:$step $cause $crit — $(printf '%s' "$excerpt" | head -c 200)"
+  # Don't silently drop the BLOCKERS.md handoff: if record_blocker fails (carry-over
+  # fix 3 added a non-zero return when MAINREPO is unset, plus disk/permission
+  # failures), the fragment is still written as blocked above but the human-facing
+  # ledger entry FR-67 requires would be missing. Surface the failure so the
+  # operator sees "BLOCKED + no ledger row" instead of a silent gap.
+  record_blocker "$tdd" "$gate:$step $cause $crit — $(printf '%s' "$excerpt" | head -c 200)" \
+    || echo "warning: _rework_escalate: record_blocker failed for $slug ($cause); BLOCKERS.md not updated — operator must add the entry by hand" >&2
 }
 
 # _rework_loop <slug> <tdd> <rbase> <log>  — the bounded automatic rework loop
@@ -475,6 +486,13 @@ _rework_escalate() {  # <slug> <tdd> <gate> <step> <cause> <ref> <criterion> <ex
 _rework_loop() {  # <slug> <tdd> <rbase> <log>
   local slug="$1" tdd="$2" rbase="$3" log="$4"
   local gate="review" step="${THROUGHLINE_REWORK_STEP:-1}"
+  # Numeric guards on both knobs (Minor-2 from TDD 0019 review). `step` flows into
+  # sed patterns and JSON keys downstream — a non-numeric value would corrupt the
+  # sed expression and produce malformed JSON. Same defense as `max` immediately
+  # below. Knob isn't snapshotted in run.json (it's a developer override, not a
+  # config knob users would tune), but the guard keeps a hostile env from breaking
+  # the loop's state writes.
+  case "$step" in ''|*[!0-9]*) step=1 ;; esac
   local max="${THROUGHLINE_REWORK_MAX:-3}"; case "$max" in ''|*[!0-9]*) max=3 ;; esac
   local build_start="$rbase" cleared attempts=0 rrc rs _retries_json
   cleared="$(git rev-parse HEAD 2>/dev/null || echo "$rbase")"
@@ -512,14 +530,29 @@ _rework_loop() {  # <slug> <tdd> <rbase> <log>
 
     # One bounded rework attempt (FR-62).
     attempts="$(_rework_attempt_count "$slug" "$gate" "$step")"
-    local cap _start _fin new_head spend
+    local cap _start _fin new_head spend rwrc
     cap="$(_rework_scope_cap "$RWK_REGION")"
     cleared="$(git rev-parse HEAD 2>/dev/null || echo "$cleared")"
     _start=$(date +%s)
-    new_head="$(_rework_one "$tdd" "$log" "$RWK_REF" "$RWK_TEXT" "$cap")"
+    # Capture exit code separately. Pre-fix this was `new_head="$(_rework_one …)"`
+    # which discarded the return code; a missing rework-prompt template (or any
+    # other internal failure) produced an empty stdout that the empty-diff branch
+    # below then treated as a normal "model produced no commit," silently burning
+    # one of the bounded attempts on a configuration error. The implement.sh
+    # startup check guards the template path on a real run, but the gate log is
+    # the durable diagnostic record and must carry the failure.
+    new_head="$(_rework_one "$tdd" "$log" "$RWK_REF" "$RWK_TEXT" "$cap")"; rwrc=$?
     _fin=$(date +%s)
     spend="$(_extract_token_spend "$(_last_session_path "$_start")")"
     local model="${THROUGHLINE_REWORK_MODEL:-sonnet}"
+
+    if [ "$rwrc" -ne 0 ]; then
+      printf 'error: _rework_loop: _rework_one returned %s for %s at %s:%s (cap=%s); aborting the loop without burning further budget\n' \
+        "$rwrc" "$slug" "$gate" "$step" "$cap" | tee -a "$log" >&2
+      _record_rework_attempt "$slug" "$attempts" "$gate" "$step" "$model" "$spend" "$_start" "$_fin" "$RWK_REF" "rejected:rework-invocation-failed"
+      _terminal_state "$slug" failed "" "rework invocation failed (rc=$rwrc) at $gate:$step"
+      return 1
+    fi
 
     # Empty/no-commit rework (§Failure modes): record empty-diff, do not reset,
     # let the next review pass re-block (and eventually exhaust the budget).
@@ -539,7 +572,15 @@ _rework_loop() {  # <slug> <tdd> <rbase> <log>
         *)                         cause=structural-finding;    crit="(?)" ;;
       esac
       _record_rework_attempt "$slug" "$attempts" "$gate" "$step" "$model" "$spend" "$_start" "$_fin" "$RWK_REF" "rejected:$cause"
-      git reset --hard "$cleared" >>"$log" 2>&1   # hard-reset the rejected rework off the branch
+      # Hard-reset the rejected rework off the branch. If this fails, the rejected
+      # commit stays on HEAD while we still write a BLOCKED verdict below — the
+      # branch state would silently contradict the verdict (ADR 0006). Log the
+      # inconsistency explicitly to both the gate log and stderr so an operator
+      # inspecting the branch sees the mismatch instead of trusting HEAD blindly.
+      if ! git reset --hard "$cleared" >>"$log" 2>&1; then
+        printf 'warning: _rework_loop: git reset --hard %s failed for %s; HEAD may still carry the rejected rework commit (verdict: BLOCKED %s %s)\n' \
+          "$cleared" "$slug" "$cause" "$crit" | tee -a "$log" >&2
+      fi
       _rework_escalate "$slug" "$tdd" "$gate" "$step" "$cause" "$RWK_REF" "$crit" "$(printf '%s\n' "$pp" | head -1)"
       _terminal_state "$slug" blocked "" "$cause $crit (rework rejected pre-ship)"
       return 1

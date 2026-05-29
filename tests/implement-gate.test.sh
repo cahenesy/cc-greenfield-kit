@@ -65,6 +65,14 @@ if printf '%s' "$prompt" | grep -q 'INDEPENDENT review gate'; then
   cat "$STUBDIR/review-$slug" 2>/dev/null || echo "REVIEW_RESULT: PASS"
   exit 0
 fi
+# TDD 0019 bounded rework loop: a review BLOCK triggers a rework pass. The
+# default rework is a no-op (empty diff) so the loop exhausts its attempt
+# budget and the TDD halts BLOCKED with rework-budget-exhausted — scenarios
+# that want a real fix supply $STUBDIR/rework-$slug.
+if printf '%s' "$prompt" | grep -q 'BOUNDED rework pass'; then
+  bash "$STUBDIR/rework-$slug" 2>/dev/null || true
+  exit 0
+fi
 # failing-test-first commit, unless this scenario suppresses it
 if [ ! -f "$STUBDIR/no-test-first-$slug" ]; then
   echo "test for $slug" >> "test-$slug.txt"
@@ -105,13 +113,17 @@ echo "[B] ci-checks gate: tests red -> NOT implemented"
   has "$R" "FAIL verification" "report shows verification failure"
 ) || true
 
-echo "[C] review gate: review BLOCK -> NOT implemented"
+echo "[C] review gate: persistent review BLOCK -> bounded rework exhausts -> NOT implemented"
 ( setup "$ROOT/c" 1
+  # Review always blocks and the default rework is a no-op (empty diff), so the
+  # bounded loop ships nothing, exhausts its attempt budget (TDD 0019 / FR-65),
+  # and the TDD halts BLOCKED — never flipped (ADR 0007 supersedes first-failure
+  # halt; a review BLOCK now drives the rework loop, not an immediate FAIL).
   printf 'REVIEW_RESULT: BLOCK found a real bug\n' > "$STUBDIR/review-0001-alpha"
-  bash "$IMPL" --change ci >/dev/null 2>&1
+  THROUGHLINE_REWORK_MAX=2 bash "$IMPL" --change ci >/dev/null 2>&1
   R="$(report)"
   [ "$(status_on docs/tdd/0001-alpha.md ci/0001-alpha)" = ready ] && ok "TDD left ready (review blocked flip)" || bad "TDD must stay ready when review blocks (got '$(status_on docs/tdd/0001-alpha.md ci/0001-alpha)')"
-  has "$R" "FAIL review" "report shows review block"
+  has "$R" "BLOCKED review" "report shows the rework loop halted the review gate"
 ) || true
 
 echo "[D] downstream halt: first TDD fails verify -> second BLOCKED, not attempted"
@@ -371,4 +383,25 @@ if [ -f "$GRM" ]; then
   bash "$GRM" || GRM_FAIL=1
 fi
 
-[ "$FAIL" -eq 0 ] && [ "$RPV_FAIL" -eq 0 ] && [ "$TSR_FAIL" -eq 0 ] && [ "$BTS_FAIL" -eq 0 ] && [ "$SMS_FAIL" -eq 0 ] && [ "$PRM_FAIL" -eq 0 ] && [ "$GRM_FAIL" -eq 0 ]
+# Run the bounded-rework-loop eval (TDD 0019 / FR-61, FR-62, FR-65, FR-66,
+# FR-67, FR-68) as part of the same suite — it exercises the rework loop's
+# config snapshot, telemetry, scope/structural pre-pass, and the gate_one
+# review-gate wiring, all runner-adjacent gate scaffolding.
+BRL="$(dirname "$0")/bounded-rework-loop.test.sh"
+BRL_FAIL=0
+if [ -f "$BRL" ]; then
+  echo
+  bash "$BRL" || BRL_FAIL=1
+fi
+
+# Run the run-recovery eval (TDD 0011 / FR-39..FR-45 + TDD 0019 carry-over
+# fail-loud fixes) as part of the same suite so the resume + carry-over
+# fixtures are gated by CI, not orphaned from the aggregator.
+RR="$(dirname "$0")/run-recovery.test.sh"
+RR_FAIL=0
+if [ -f "$RR" ]; then
+  echo
+  bash "$RR" || RR_FAIL=1
+fi
+
+[ "$FAIL" -eq 0 ] && [ "$RPV_FAIL" -eq 0 ] && [ "$TSR_FAIL" -eq 0 ] && [ "$BTS_FAIL" -eq 0 ] && [ "$SMS_FAIL" -eq 0 ] && [ "$PRM_FAIL" -eq 0 ] && [ "$GRM_FAIL" -eq 0 ] && [ "$BRL_FAIL" -eq 0 ] && [ "$RR_FAIL" -eq 0 ]

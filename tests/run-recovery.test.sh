@@ -536,6 +536,78 @@ echo "[6.a] skills/implement/SKILL.md documents --check-paused and conditional -
     || bad "skill should mention --resume on the launch line"
 ) || true
 
+# --- TDD 0019 carry-over: fail-loud / propagate-exit-code fixes (FR-70) ------
+# Four MAJOR findings from the TDD 0017 review of code moved verbatim. Each must
+# halt non-zero with a diagnostic rather than silently passing.
+
+echo "[CO-1] gate_one halts honestly when flip_status's commit fails (no false done)"
+( D="$ROOT/co1"; mkdir -p "$D/state.d" "$D/repo"; cd "$D/repo" || { bad "cd failed"; exit 0; }
+  export STATE_DIR="$D/state.d" STATE_STARTED_AT=1000 STATE_MODE="sequential"
+  export INTEGRATION="master" CHANGE="ci" LOGDIR="$D" MAINREPO="$D/repo"
+  TDDS=()
+  THROUGHLINE_SOURCE_ONLY=1 source "$IMPL" || { bad "source guard missing"; exit 0; }
+  git init -q -b master; git config user.email t@t.t; git config user.name t
+  mkdir -p docs/tdd
+  # Already `implemented` → flip_status's Status sed is a no-op → the flip
+  # commit fails (nothing to commit). All four gates are marked done so gate_one
+  # proceeds straight to the flip; it must mark failed, not done.
+  printf '# TDD\nStatus: implemented\n' > docs/tdd/0001-a.md
+  git add -A; git commit -qm init >/dev/null
+  _write_tdd_fragment 0001-a 1 docs/tdd/0001-a.md 1 reviewing review \
+    1000 1000 "" "" "log" "" "" "build,test-first,verify,verify-runtime,review" "" "" "" "" "" "" ""
+  export RESUME_GATES_DONE_0001_a="build,test-first,verify,verify-runtime,review"
+  st="$(gate_one docs/tdd/0001-a.md "$(git rev-parse HEAD)" "$D/flip.log")"; rc=$?
+  [ "$rc" -ne 0 ] && ok "gate_one returns non-zero on a failed flip" \
+    || bad "gate_one must halt non-zero when the flip commit fails (rc=$rc, st=$st)"
+  st2="$(sed -n 's/.*"status":"\([^"]*\)".*/\1/p' "$STATE_DIR/0001-a.json" | head -1)"
+  [ "$st2" != "done" ] && ok "fragment not marked done on a failed flip" \
+    || bad "fragment must NOT be 'done' when the flip commit failed"
+) || true
+
+echo "[CO-2] install_deps returns non-zero when BOTH install attempts fail"
+( D="$ROOT/co2"; mkdir -p "$D/bin"; cd "$D" || { bad "cd failed"; exit 0; }
+  THROUGHLINE_SOURCE_ONLY=1 source "$IMPL" || { bad "source guard missing"; exit 0; }
+  printf '{"name":"x"}\n' > package.json
+  printf '{}\n' > package-lock.json          # → npm ci, then npm install
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$D/bin/npm"; chmod +x "$D/bin/npm"
+  PATH="$D/bin:$PATH" install_deps "$D/install.log"; rc=$?
+  [ "$rc" -ne 0 ] && ok "install_deps returns non-zero on total install failure" \
+    || bad "install_deps must return non-zero when both attempts fail (rc=$rc)"
+) || true
+
+echo "[CO-3] record_blocker fails loud when MAINREPO is unset (no PWD fallback)"
+( D="$ROOT/co3"; mkdir -p "$D"; cd "$D" || { bad "cd failed"; exit 0; }
+  THROUGHLINE_SOURCE_ONLY=1 source "$IMPL" || { bad "source guard missing"; exit 0; }
+  unset MAINREPO
+  out="$(record_blocker docs/tdd/0001-a.md "some reason" 2>&1)"; rc=$?
+  [ "$rc" -ne 0 ] && ok "record_blocker returns non-zero with MAINREPO unset" \
+    || bad "record_blocker must fail loud when MAINREPO is unset (rc=$rc)"
+  printf '%s\n' "$out" | grep -qi 'fatal\|MAINREPO' \
+    && ok "record_blocker emits a diagnostic naming MAINREPO" || bad "record_blocker should name MAINREPO in its diagnostic"
+  [ ! -f "$D/docs/tdd/BLOCKERS.md" ] && ok "no blocker written to the worktree PWD" \
+    || bad "record_blocker must NOT write to PWD when MAINREPO is unset"
+) || true
+
+echo "[CO-4] gate_one fails loud at the entry when STATE_DIR is unset"
+( D="$ROOT/co4"; mkdir -p "$D/bin"; cd "$D" || { bad "cd failed"; exit 0; }
+  THROUGHLINE_SOURCE_ONLY=1 source "$IMPL" || { bad "source guard missing"; exit 0; }
+  git init -q -b master; git config user.email t@t.t; git config user.name t
+  mkdir -p docs/tdd; printf '# TDD\nStatus: draft\n' > docs/tdd/0001-a.md
+  git add -A; git commit -qm init >/dev/null
+  # No-op claude so that WITHOUT the entry guard gate_one would fall through to
+  # the build gate and fail with a "no BATCH_RESULT" diagnostic (which does NOT
+  # name STATE_DIR) — the STATE_DIR diagnostic is what proves the guard fired.
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$D/bin/claude"; chmod +x "$D/bin/claude"
+  export PATH="$D/bin:$PATH"
+  unset STATE_DIR
+  out="$(gate_one docs/tdd/0001-a.md "$(git rev-parse HEAD)" "$D/g.log" 2>&1)"; rc=$?
+  [ "$rc" -ne 0 ] && ok "gate_one returns non-zero with STATE_DIR unset" \
+    || bad "gate_one must fail loud when STATE_DIR is unset (rc=$rc)"
+  printf '%s\n' "$out" | grep -q 'FATAL' && printf '%s\n' "$out" | grep -q 'STATE_DIR' \
+    && ok "gate_one emits a clean FATAL diagnostic naming STATE_DIR (not an unbound-var crash)" \
+    || bad "gate_one should fail loud with a FATAL naming STATE_DIR (got: $out)"
+) || true
+
 echo
 PASS="$(grep -c '^ok$'   "$RESULTS" 2>/dev/null)"; PASS="${PASS:-0}"
 FAIL="$(grep -c '^fail$' "$RESULTS" 2>/dev/null)"; FAIL="${FAIL:-0}"

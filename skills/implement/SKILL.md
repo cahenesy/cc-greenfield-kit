@@ -169,11 +169,36 @@ to `implemented`, the runner enforces four independent gates:
 Only when all four pass does the runner flip the TDD and open the PR(s) per the
 mode. It NEVER merges — merging is your approval gate.
 
-Failure handling: in sequential mode a failed gate HALTS the run and marks every
-downstream (stacked) TDD `BLOCKED` rather than building on a broken base; in
-parallel mode a failure affects only that feature. A build that ends
-`BATCH_RESULT: BLOCKED <reason>` is a DESIGN blocker — the runner appends it to
-`docs/tdd/BLOCKERS.md` for `/tdd-author` to resolve.
+Bounded rework loop (TDD 0019 / ADR 0007): a review `BLOCK` no longer halts on
+first failure. A halting finding (`blocker`/`major`) triggers a bounded
+automatic rework loop **inside the same `/implement` invocation** — you are kept
+informed but are NOT asked to drive between a finding and convergence. Each
+attempt runs on the rework model (`sonnet` by default — cheaper and less prone
+to opportunistic refactoring than the Opus build), fixes only the cited finding,
+and faces a mechanical pre-pass before it ships: a per-attempt scope cap
+(`max(THROUGHLINE_REWORK_SCOPE_FLOOR=60, THROUGHLINE_REWORK_SCOPE_FACTOR=3 ×
+finding-region)`) and the TDD's `## Touched files` / `## Expected diff size`
+declarations. The loop halts for human attention ONLY when it cannot proceed
+automatically:
+- **`structural-finding`** — the reviewer tagged the finding structural, or the
+  rework would touch a file outside the TDD's declared set / exceed its per-file
+  bound. The runner does NOT attempt a large in-iteration refactor; it BLOCKs and
+  appends a design-level entry to `docs/tdd/BLOCKERS.md` (FR-67).
+- **`rework-scope-exceeded`** — a rework commit overran the scope cap; it is
+  hard-reset off the branch before shipping and the TDD BLOCKs (FR-66).
+- **`rework-budget-exhausted`** — `THROUGHLINE_REWORK_MAX` (default 3) attempts
+  per gate-step did not converge; the TDD BLOCKs for `/tdd-author` (FR-65).
+Per-attempt token spend is recorded as telemetry (rework is expected to cost
+less than the original build — FR-68), not enforced as a hard cap. The four
+knobs are snapshotted into `run.json`'s `config.rework_config` so any halt is
+reproducible from the run-state record alone.
+
+Failure handling: in sequential mode a failed gate (after bounded rework
+exhausts) HALTS the run and marks every downstream (stacked) TDD `BLOCKED`
+rather than building on a broken base; in parallel mode a failure affects only
+that feature. A build that ends `BATCH_RESULT: BLOCKED <reason>` is a DESIGN
+blocker — the runner appends it to `docs/tdd/BLOCKERS.md` for `/tdd-author` to
+resolve.
 
 When the build finishes: a report at
 `docs/tdd/.implement-logs/<timestamp>/report.md` lists per-feature status
@@ -211,4 +236,10 @@ for the set instead.
 - `THROUGHLINE_REQUIRE_RUNTIME_VERIFY=0` disables the runtime-verification gate
   the same way (the documented escape hatch — e.g. a batch of pure refactors
   whose TDDs all declare `SKIP`); leave it on (default) for feature work.
+- Bounded-rework knobs (TDD 0019): `THROUGHLINE_REWORK_MODEL` (default `sonnet`),
+  `THROUGHLINE_REWORK_MAX` (per-gate-step attempt cap, default 3),
+  `THROUGHLINE_REWORK_SCOPE_FLOOR` (default 60) and
+  `THROUGHLINE_REWORK_SCOPE_FACTOR` (default 3) for the per-attempt scope cap
+  `max(floor, factor × finding-region)`. All four are recorded in
+  `run.json`'s `config.rework_config`.
 - "skip git" → build and commit on the current branch with no branching/PRs.

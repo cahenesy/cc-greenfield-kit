@@ -81,7 +81,7 @@ echo "[3] set_run_state: blocked dominates paused in the run-level rollup"
   THROUGHLINE_SOURCE_ONLY=1 source "$IMPL" || { bad "source guard missing"; exit 0; }
   _write_tdd_fragment 0001-a 1 docs/tdd/0001-a.md 1 paused  verify-runtime 1000 1000 "" "" "" "" "ratelimit" "" "" ""
   _write_tdd_fragment 0002-b 2 docs/tdd/0002-b.md 2 blocked review         1000 1000 "" "" "" "" "" "" "" ""
-  set_run_state done
+  set_run_state "done"
   R="$D/state.d/run.json"
   grep -q '"state":"blocked"' "$R" 2>/dev/null \
     && ok "run.json state=blocked when a TDD is blocked (dominates paused)" \
@@ -127,7 +127,6 @@ echo "[5] status.sh halt render for a non-paused cause omits the Resume: line"
 
 echo "[5b] status.sh halt render for a paused cause INCLUDES the Resume: line"
 ( D="$ROOT/5b"; mkdir -p "$D/state.d"
-  RUNID="$(basename "$D")"
   cat > "$D/state.d/run.json" <<EOF
 {"schema":1,"started_at":1,"updated_at":2,"pid":1,"integration_branch":"master","mode":"sequential","change":"ci","logdir":"$D","total":1,"completed":0,"failed":0,"blocked":0,"skipped":0,"paused":1,"state":"paused","pause_started_at":3}
 EOF

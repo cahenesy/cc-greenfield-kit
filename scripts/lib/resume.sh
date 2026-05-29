@@ -73,7 +73,7 @@ _update_paused_cause() {
   # refuse-to-resume path must not wipe last_cleared_review_sha / cleared_step_log).
   local last_cleared_sha cleared_step_log
   last_cleared_sha="$(_read_fragment_field "$f" last_cleared_review_sha)"
-  cleared_step_log="$(_read_fragment_raw_array "$f" cleared_step_log)"
+  cleared_step_log="$(_read_fragment_cleared_log "$f")"
   # TDD 0011 / iter-5 MAJOR-1: propagate write failures.
   if ! _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
     "${sta:-$(date +%s)}" "$(date +%s)" "$branch" "$pr_url" "$log_f" "$note" \

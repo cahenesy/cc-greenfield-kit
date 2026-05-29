@@ -39,9 +39,89 @@ build_one() {  # <tdd> <log>
   fi
   return "$_rc"   # TDD 0011 / BL-2: preserve claude's exit code (incl. signals like 143)
 }
+# _review_prior_patterns_csv <slug> (TDD 0020 / FR-59) — flatten + dedup every
+# pattern_tag recorded across the TDD's cleared_step_log into a CSV. Feeds the
+# review prompt's "Prior addressed patterns" interpolation so a later pass can
+# flag a recurrence (FR-59). Empty when there is no fragment or no tags yet.
+_review_prior_patterns_csv() {  # <slug>
+  # Split the `local` declaration: under bash 5.3 `set -u`, a single
+  # `local slug="$1" f="…$slug…"` raises 'slug: unbound variable' (the f
+  # initializer expands $slug before the local has bound it — see state.sh).
+  local slug="$1" log f
+  f="${STATE_DIR:-}/$slug.json"
+  { [ -z "${STATE_DIR:-}" ] || [ ! -f "$f" ]; } && return 0
+  log="$(_read_fragment_cleared_log "$f")"
+  { [ -z "$log" ] || [ "$log" = "[]" ]; } && return 0
+  # Each cleared-step entry's pattern_tags is a flat string array, so the inner
+  # `[^]]*` match is safe here (unlike the outer log, which nests).
+  printf '%s' "$log" \
+    | grep -aoE '"pattern_tags":\[[^]]*\]' \
+    | grep -aoE '"[^"]+"' \
+    | tr -d '"' \
+    | awk 'NF && !seen[$0]++' \
+    | paste -sd, -
+}
+
+# _render_review_prompt <tdd> <scope-base> <scope-head> <branch> <prior-tags-csv>
+# (TDD 0020 / FR-57, FR-59) — interpolate the review prompt template's scope +
+# prior-patterns placeholders. Used by BOTH the per-step review (scope =
+# <last-cleared>..<step-sha>) and the consolidated/rework review (scope =
+# <build-start>..HEAD). Substitution is bash parameter expansion (not sed) so a
+# branch name's `/` or a tag's punctuation cannot break a sed delimiter; the
+# model-derived prior tags are substituted LAST so they cannot double-expand a
+# literal `{{...}}`. Echoes the rendered prompt.
+_render_review_prompt() {  # <tdd> <scope-base> <scope-head> <branch> <prior-tags-csv>
+  local tdd="$1" sbase="$2" shead="$3" branch="$4" prior_csv="${5:-}" tmpl prompt prior_disp
+  tmpl="${RTMPL:-}"
+  [ -z "$tmpl" ] && tmpl="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/review-prompt.md"
+  if [ ! -f "$tmpl" ]; then
+    echo "error: _render_review_prompt: review prompt template not found ($tmpl)" >&2
+    return 1
+  fi
+  if [ -z "$prior_csv" ]; then prior_disp="none"; else prior_disp="${prior_csv//,/, }"; fi
+  prompt="$(cat "$tmpl")"
+  prompt="${prompt//\{\{TDD\}\}/$tdd}"
+  prompt="${prompt//\{\{BASE\}\}/$sbase}"
+  prompt="${prompt//\{\{SCOPE_BASE\}\}/$sbase}"
+  prompt="${prompt//\{\{SCOPE_HEAD\}\}/$shead}"
+  prompt="${prompt//\{\{BRANCH\}\}/$branch}"
+  prompt="${prompt//\{\{PRIOR_PATTERNS\}\}/$prior_disp}"
+  printf '%s' "$prompt"
+}
+
+# _extract_pattern_tags <review-log> [<pre-log-size>] (TDD 0020 / FR-59) — pull
+# the `pattern_tags: [a, b, …]` lines a review pass emits per finding into a
+# distinct CSV. A pure awk/sed pass (no model call) per §3. The optional
+# pre-log-size scopes the scan to the current pass's appended slice (same
+# technique as _rework_extract_finding) so a stale tag line from a prior
+# iteration is not re-harvested.
+_extract_pattern_tags() {  # <review-log> [<pre-log-size>]
+  local log="$1" pre="${2:-0}" content
+  if [ "$pre" -gt 0 ] 2>/dev/null; then
+    content="$(tail -c +"$((pre + 1))" "$log" 2>/dev/null)"
+  else
+    content="$(cat "$log" 2>/dev/null)"
+  fi
+  printf '%s\n' "$content" \
+    | grep -aoE 'pattern_tags:[[:space:]]*\[[^]]*\]' \
+    | sed -E 's/.*\[([^]]*)\].*/\1/' \
+    | tr ',' '\n' \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+    | awk 'NF && !seen[$0]++' \
+    | paste -sd, -
+}
+
 review_one() {  # <tdd> <base-ref> <log>
-  local tdd="$1" base="$2" log="$3" prompt
-  prompt="$(sed -e "s#{{TDD}}#${tdd}#g" -e "s#{{BASE}}#${base}#g" "$RTMPL")"
+  local tdd="$1" base="$2" log="$3" slug branch prior prompt
+  slug="$(basename "$tdd" .md)"
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  prior="$(_review_prior_patterns_csv "$slug")"
+  # Consolidated/rework review scope is <build-start-base>..HEAD; the per-step
+  # review (TDD 0020 §2) renders the same template with a tighter <cleared>..<sha>.
+  if ! prompt="$(_render_review_prompt "$tdd" "$base" "HEAD" "$branch" "$prior")"; then
+    echo "error: review_one: could not render review prompt for $tdd" >>"$log"
+    return 1
+  fi
   local args=(-p "$prompt" --permission-mode auto); [ -n "$REVIEW_MODEL" ] && args+=(--model "$REVIEW_MODEL")
   local start _rc; start=$(date +%s); _rc=0
   claude "${args[@]}" >>"$log" 2>&1; _rc=$?

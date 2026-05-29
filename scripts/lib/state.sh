@@ -87,6 +87,21 @@ _read_fragment_raw_object() {  # <file> <field-name>
   _validate_field_name "$k" || { echo "error: _read_fragment_raw_object rejected unsafe field name '$k'" >&2; return 1; }
   sed -n "s/.*\"$k\":\\({[^}]*}\\).*/\\1/p" "$f" | head -1
 }
+# Read the cleared_step_log array (TDD 0020). Its entries nest pattern_tags
+# arrays, so the flat _read_fragment_raw_array regex (`\[[^]]*\]`, which stops at
+# the FIRST `]`) would truncate it mid-array and corrupt the JSON on the next
+# carry-forward write (FR-44). cleared_step_log is the LAST fragment field, so a
+# greedy match anchored to the fragment's closing brace captures the whole array
+# including nested brackets. INVARIANT: cleared_step_log must remain the last
+# field written by _write_tdd_fragment's printf — if a field is ever added after
+# it, update this reader's anchor. Empty/`[]`/absent → empty (matching the other
+# readers' "no value yet" default).
+_read_fragment_cleared_log() {  # <file>
+  local f="$1" raw
+  raw="$(sed -n 's/.*"cleared_step_log":\(\[.*\]\)}[[:space:]]*$/\1/p' "$f" | head -1)"
+  [ "$raw" = "[]" ] && return 0
+  printf '%s' "$raw"
+}
 
 # Escape a string for safe inclusion as a JSON string value. Free-text fields
 # (note/branch/pr_url/log) ride through this; structural fields are integers or
@@ -558,7 +573,7 @@ set_tdd_state() {
   # forward and NEVER cleared by a status transition (resume reads them).
   local last_cleared_sha cleared_step_log
   last_cleared_sha="$(_read_fragment_field "$f" last_cleared_review_sha)"
-  cleared_step_log="$(_read_fragment_raw_array "$f" cleared_step_log)"
+  cleared_step_log="$(_read_fragment_cleared_log "$f")"
   if [ -n "$gate_done" ]; then
     case ",$gates_csv," in
       *",$gate_done,"*) : ;;  # already recorded; idempotent
@@ -635,7 +650,7 @@ set_tdd_meta() {
   # TDD 0020: carry the cleared-step fields forward (set_tdd_meta never alters them).
   local last_cleared_sha cleared_step_log
   last_cleared_sha="$(_read_fragment_field "$f" last_cleared_review_sha)"
-  cleared_step_log="$(_read_fragment_raw_array "$f" cleared_step_log)"
+  cleared_step_log="$(_read_fragment_cleared_log "$f")"
   for kv in "$@"; do case "$kv" in
     branch=*) branch="${kv#branch=}" ;;
     pr_url=*) pr_url="${kv#pr_url=}" ;;
@@ -751,7 +766,7 @@ set_halt_cause() {
   # FR-59 cross-step-learning audit reads it post-halt) or the last-cleared SHA.
   local last_cleared_sha cleared_step_log
   last_cleared_sha="$(_read_fragment_field "$f" last_cleared_review_sha)"
-  cleared_step_log="$(_read_fragment_raw_array "$f" cleared_step_log)"
+  cleared_step_log="$(_read_fragment_cleared_log "$f")"
   if _is_paused_cause "$cause"; then paused_cause="$cause"; else paused_cause=""; fi
   now=$(date +%s)
   if ! _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
@@ -803,7 +818,7 @@ _rewrite_fragment_rework() {
   # must not wipe last_cleared_review_sha / cleared_step_log).
   local last_cleared_sha cleared_step_log
   last_cleared_sha="$(_read_fragment_field "$f" last_cleared_review_sha)"
-  cleared_step_log="$(_read_fragment_raw_array "$f" cleared_step_log)"
+  cleared_step_log="$(_read_fragment_cleared_log "$f")"
   now=$(date +%s)
   if ! _write_tdd_fragment "$slug" "${n:-0}" "$path" "${qp:-0}" "$status" "$stage" \
     "${sta:-$now}" "$now" "$branch" "$pr_url" "$log" "$note" \
@@ -997,7 +1012,7 @@ _record_cleared_step() {  # <slug> <step-id> <base-sha> <head-sha> <pattern-tags
   # would confuse a `%]}` strip, so the splice is unambiguous on a well-formed
   # `]`-terminated array.
   local existing new
-  existing="$(_read_fragment_raw_array "$f" cleared_step_log)"
+  existing="$(_read_fragment_cleared_log "$f")"
   if [ -z "$existing" ] || [ "$existing" = "[]" ]; then
     new="[$entry]"
   elif [ "${existing: -1}" != ']' ]; then

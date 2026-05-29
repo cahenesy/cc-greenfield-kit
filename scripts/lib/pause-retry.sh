@@ -119,7 +119,7 @@ _enter_paused() {
   # resumed build's per-step loop reads last_cleared_review_sha to scope its diff.
   local last_cleared_sha cleared_step_log
   last_cleared_sha="$(_read_fragment_field "$f" last_cleared_review_sha)"
-  cleared_step_log="$(_read_fragment_raw_array "$f" cleared_step_log)"
+  cleared_step_log="$(_read_fragment_cleared_log "$f")"
   # Capture the build branch HEAD so resume can detect divergence (TDD 0011
   # failure mode: "Build branch HEAD differs at resume from what gates saw").
   branch_head_now="$(git rev-parse --verify HEAD 2>/dev/null || true)"
@@ -301,7 +301,7 @@ _append_retry() {
   # not wipe last_cleared_review_sha / cleared_step_log).
   local last_cleared_sha cleared_step_log
   last_cleared_sha="$(_read_fragment_field "$f" last_cleared_review_sha)"
-  cleared_step_log="$(_read_fragment_raw_array "$f" cleared_step_log)"
+  cleared_step_log="$(_read_fragment_cleared_log "$f")"
   local entry new
   entry="{\"gate\":\"$(json_escape "$gate_name")\",\"count\":$count,\"backoff_s\":$backoff}"
   # TDD 0011 / BL-5: validate that retries_json is well-formed before

@@ -478,7 +478,23 @@ _rework_one() {  # <tdd> <log> <finding-ref> <finding-text> <cap>
     echo "warning: _rework_one: claude subprocess exited rc=$_rc (no rework commit; caller will treat as invocation failure)" >>"$log"
     return "$_rc"
   fi
-  git rev-parse HEAD 2>/dev/null
+  # Distinguish a git-rev-parse failure from a claude failure. Pre-fix this
+  # ended with `git rev-parse HEAD 2>/dev/null`, which suppressed git's stderr
+  # entirely AND returned git's rc through the function. If claude succeeded
+  # but git failed (corrupt .git, missing binary, permission), the caller's
+  # `rwrc != 0` guard fired with the diagnostic "rework invocation failed",
+  # pointing the operator at claude rather than git — the actual git error was
+  # silently lost (TDD 0019 review-rerun-3 MAJOR-1). Now: tee git's stderr into
+  # the gate log so the operator can see what went wrong, log a distinguishing
+  # message before propagating, and return git's rc so the caller still halts
+  # — just halts with a diagnosable trail.
+  local head_out head_rc
+  head_out="$(git rev-parse HEAD 2>>"$log")"; head_rc=$?
+  if [ "$head_rc" -ne 0 ]; then
+    echo "error: _rework_one: git rev-parse HEAD failed (rc=$head_rc); claude ran successfully but the post-rework HEAD is unresolvable — inspect git's stderr above" >>"$log"
+    return "$head_rc"
+  fi
+  printf '%s' "$head_out"
 }
 
 # _rework_extract_finding <review-log> [<pre-log-size>]  — set RWK_STRUCTURAL /
@@ -668,7 +684,16 @@ _rework_loop() {  # <slug> <tdd> <rbase> <log>
     if [ "$rwrc" -ne 0 ]; then
       printf 'error: _rework_loop: _rework_one returned %s for %s at %s:%s (cap=%s); aborting the loop without burning further budget\n' \
         "$rwrc" "$slug" "$gate" "$step" "$cap" | tee -a "$log" >&2
-      _record_rework_attempt "$slug" "$attempts" "$gate" "$step" "$model" "$spend" "$_start" "$_fin" "$RWK_REF" "rejected:rework-invocation-failed"
+      # All four _record_rework_attempt sites below check the inner function's
+      # return code (TDD 0019 review-rerun-3 MAJOR-2): a fragment-write failure
+      # (disk full / unwritable / corrupt) would otherwise silently lose the
+      # FR-68 telemetry record while the gate still halts, leaving an operator
+      # with a BLOCKED TDD and no per-attempt cost trail to diagnose. The
+      # `tee -a "$log" >&2` keeps the warning in the durable gate log AND on
+      # stderr for the live runner.
+      _record_rework_attempt "$slug" "$attempts" "$gate" "$step" "$model" "$spend" "$_start" "$_fin" "$RWK_REF" "rejected:rework-invocation-failed" \
+        || printf 'warning: _rework_loop: rework telemetry write failed for %s at %s:%s (outcome=rejected:rework-invocation-failed)\n' \
+             "$slug" "$gate" "$step" | tee -a "$log" >&2
       _terminal_state "$slug" failed "" "rework invocation failed (rc=$rwrc) at $gate:$step"
       return 1
     fi
@@ -676,7 +701,9 @@ _rework_loop() {  # <slug> <tdd> <rbase> <log>
     # Empty/no-commit rework (§Failure modes): record empty-diff, do not reset,
     # let the next review pass re-block (and eventually exhaust the budget).
     if [ -z "$new_head" ] || [ "$new_head" = "$cleared" ]; then
-      _record_rework_attempt "$slug" "$attempts" "$gate" "$step" "$model" "$spend" "$_start" "$_fin" "$RWK_REF" "empty-diff"
+      _record_rework_attempt "$slug" "$attempts" "$gate" "$step" "$model" "$spend" "$_start" "$_fin" "$RWK_REF" "empty-diff" \
+        || printf 'warning: _rework_loop: rework telemetry write failed for %s at %s:%s (outcome=empty-diff)\n' \
+             "$slug" "$gate" "$step" | tee -a "$log" >&2
       continue
     fi
 
@@ -684,13 +711,26 @@ _rework_loop() {  # <slug> <tdd> <rbase> <log>
     local pp pprc cause crit
     pp="$(_rework_pre_pass "$slug" "$tdd" "$new_head" "$cleared" "$build_start" "$RWK_REGION")"; pprc=$?
     if [ "$pprc" -ne 0 ]; then
+      # ADR 0007 / TDD 0019 review-rerun-3 MAJOR-3: a `PRECHECK_FAIL:
+      # git-diff-failed` from _rework_pre_pass is an EXTERNAL infrastructure
+      # failure (corrupt .git, missing binary, permission), not a design
+      # flaw — the closed halt_cause enum maps that to `external-blocker`,
+      # not `structural-finding`. Pre-fix the case fell through to `*)` with
+      # cause=structural-finding crit="(?)", producing a BLOCKERS.md entry
+      # that directed the operator to "revise TDD via /tdd-author" — wrong
+      # remediation for a git crash. Now the `git-diff-failed` arm is
+      # checked FIRST so it cannot be shadowed by a later
+      # `structural-finding(*)` substring match.
       case "$pp" in
+        *git-diff-failed*)         cause=external-blocker;     crit="git-failure" ;;
         *rework-scope-exceeded*)   cause=rework-scope-exceeded; crit="scope" ;;
         *"structural-finding(a)"*) cause=structural-finding;    crit="(a)" ;;
         *"structural-finding(b)"*) cause=structural-finding;    crit="(b)" ;;
         *)                         cause=structural-finding;    crit="(?)" ;;
       esac
-      _record_rework_attempt "$slug" "$attempts" "$gate" "$step" "$model" "$spend" "$_start" "$_fin" "$RWK_REF" "rejected:$cause"
+      _record_rework_attempt "$slug" "$attempts" "$gate" "$step" "$model" "$spend" "$_start" "$_fin" "$RWK_REF" "rejected:$cause" \
+        || printf 'warning: _rework_loop: rework telemetry write failed for %s at %s:%s (outcome=rejected:%s)\n' \
+             "$slug" "$gate" "$step" "$cause" | tee -a "$log" >&2
       # Hard-reset the rejected rework off the branch. If this fails, the rejected
       # commit stays on HEAD while we still write a BLOCKED verdict below — the
       # branch state would silently contradict the verdict (ADR 0006). Log the
@@ -706,7 +746,9 @@ _rework_loop() {  # <slug> <tdd> <rbase> <log>
     fi
 
     # Shipped: advance the cleared SHA and re-review the new diff.
-    _record_rework_attempt "$slug" "$attempts" "$gate" "$step" "$model" "$spend" "$_start" "$_fin" "$RWK_REF" "shipped"
+    _record_rework_attempt "$slug" "$attempts" "$gate" "$step" "$model" "$spend" "$_start" "$_fin" "$RWK_REF" "shipped" \
+      || printf 'warning: _rework_loop: rework telemetry write failed for %s at %s:%s (outcome=shipped)\n' \
+           "$slug" "$gate" "$step" | tee -a "$log" >&2
     cleared="$new_head"
   done
 }

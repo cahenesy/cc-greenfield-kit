@@ -358,4 +358,17 @@ if [ -f "$PRM" ]; then
   bash "$PRM" || PRM_FAIL=1
 fi
 
-[ "$FAIL" -eq 0 ] && [ "$RPV_FAIL" -eq 0 ] && [ "$TSR_FAIL" -eq 0 ] && [ "$BTS_FAIL" -eq 0 ] && [ "$SMS_FAIL" -eq 0 ] && [ "$PRM_FAIL" -eq 0 ]
+# Run the gates-resume-module-sourceability eval (TDD 0017 / FR-69) as part of
+# the same suite. Pins the contract of the extracted scripts/lib/gates.sh +
+# scripts/lib/resume.sh: each must source in isolation (gates.sh after state.sh
+# + pause-retry.sh; resume.sh after all three), and a missing or unreadable
+# module must cause implement.sh to FAIL FAST rather than proceed silently with
+# every gate-executor / resume function undefined.
+GRM="$(dirname "$0")/gates-resume-module-sourceability.test.sh"
+GRM_FAIL=0
+if [ -f "$GRM" ]; then
+  echo
+  bash "$GRM" || GRM_FAIL=1
+fi
+
+[ "$FAIL" -eq 0 ] && [ "$RPV_FAIL" -eq 0 ] && [ "$TSR_FAIL" -eq 0 ] && [ "$BTS_FAIL" -eq 0 ] && [ "$SMS_FAIL" -eq 0 ] && [ "$PRM_FAIL" -eq 0 ] && [ "$GRM_FAIL" -eq 0 ]

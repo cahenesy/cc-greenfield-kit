@@ -33,13 +33,16 @@ The change:
    `merge-base(integration, branch)` and `branch` as evidence of build-gate
    completion. PRD FR-40 (revised) explicitly forbids this proxy. Replace
    the entire Source-A scan with a direct read from `gates_completed`.
-3. **Build prompt is resume-aware.** A short additional clause in
-   `build-prompt.md` instructs the build subprocess: if the branch already
-   carries commits from a prior attempt, examine them and continue from the
-   next undone sequencing step rather than restarting from step 1. This
-   formalizes the "build prompt is idempotent at the prompt level" claim
-   already relied on by combined-mode resume in TDD 0011, so the assumption
-   is no longer implicit.
+3. **Build prompt receives a structured cleared-step list on resume.**
+   The build-prompt template gains a `{{CLEARED_STEPS}}` placeholder; at
+   render time the runner substitutes the comma-separated cleared step
+   IDs from `cleared_step_log` (TDD 0020 §4) — or `none` for a fresh
+   build. The build LLM sees an explicit list of which Sequencing items
+   the prior attempt's per-step review cleared, not a hand-wave to
+   inspect git log. Partially-committed but un-cleared steps mean the
+   prior build was killed mid-step; the LLM resumes from that step's
+   commit state. The structured signal removes the LLM-inference soft
+   spot of relying on commit-message parsing.
 
 The branch-head divergence guard (TDD 0011 / BLOCKER-1+MAJOR-10) is preserved
 verbatim — it remains relevant for *both* inter-gate and intra-build resume,
@@ -111,27 +114,31 @@ arms would silently break halt-context display for such legacy fragments
 Retention has no runtime cost; the stale label is never re-displayed for
 any post-this-TDD fragment.
 
-**Modified — `scripts/build-prompt.md`:**
+**Modified — `scripts/build-prompt.md` + `scripts/lib/gates.sh`
+(`_per_step_review_loop`):**
 
-Add a single bullet to the "Build discipline" list (between the existing first
-bullet "Implement in the sequence the TDD specifies, one step at a time." and
-the FAILING TEST FIRST bullet):
+The build-prompt template gains a `{{CLEARED_STEPS}}` placeholder. At
+render time (`_per_step_review_loop`, gates.sh:407) the runner substitutes
+the comma-separated cleared step IDs from `cleared_step_log` (or `none`
+when empty) alongside the existing `{{TDD}}` substitution. New helper
+`_cleared_steps_csv <slug>` mirrors `_review_prior_patterns_csv`.
+
+Build-prompt addition (one bullet under "Build discipline"):
 
 ```
-- If the build branch already carries commits from a prior attempt (one or
-  more `test(failing):` + `feat:` / `step:` pairs that reference this TDD's
-  sequencing items), this is a RESUME, not a fresh build. Examine the
-  existing commits with `git log` against the TDD's `## Sequencing /
-  implementation plan`, identify which sequencing items are already
-  committed, and continue from the next undone step rather than restarting
-  at step 1. Do not duplicate or rewrite already-committed work; the
-  divergence guard in the runner's resume path rejects branch rewrites and
-  would refuse to flip the TDD.
+- RESUME SIGNAL. Cleared steps from any prior attempt: {{CLEARED_STEPS}}
+  (integer step IDs whose per-step review passed previously, or `none`
+  for a fresh build). On resume, continue from the lowest-numbered step
+  ID not in {{CLEARED_STEPS}}. Its base SHA = the last cleared step's
+  `head_sha` (per TDD 0020's `cleared_step_log[-1]`), or the build-start
+  SHA for the very first step; `git diff <base>..HEAD` shows any partial
+  work from the killed attempt. Extend or repair on top — do NOT rewrite
+  history (the divergence guard rejects rewrites) — then emit its
+  `STEP_COMMIT:` sentinel.
 ```
 
-This formalizes the idempotence assumption already relied on by
-combined-mode resume in TDD 0011 §5, making it an explicit prompt-level
-contract rather than an implicit hope.
+`cleared_step_log` (TDD 0020 §4 / FR-57) is authoritative — its only
+writer is the per-step review's PASS verdict.
 
 ## Data & state
 
@@ -180,9 +187,14 @@ implementation commit; runner gates this mechanically).
    (lines 201-217). Add a fixture that builds a fragment with
    `gates_completed: []` plus a branch carrying `test(failing):` commits;
    assert `_resume_from` sets the done-list without `build`.
-3. **Build prompt resume-awareness.** Add the new bullet to
-   `scripts/build-prompt.md` "Build discipline" section. Test: grep the
-   prompt for the literal phrases "RESUME" and "next undone step".
+3. **Build prompt structured cleared-step signal.** Add
+   `{{CLEARED_STEPS}}` placeholder + RESUME SIGNAL bullet to
+   `build-prompt.md`. Add `_cleared_steps_csv <slug>` helper to
+   `gates.sh` (mirrors `_review_prior_patterns_csv`). Extend
+   `_per_step_review_loop`'s render at gates.sh:407 to substitute the
+   placeholder. Test: helper returns `none` empty / CSV populated; the
+   rendered prompt's literal placeholder is replaced correctly in each
+   case.
 4. **Intra-build interruption fixture.** Add a comprehensive fixture to
    `tests/run-recovery.test.sh` covering FR-40 (b): construct a paused
    fragment (`status=paused`, `paused_cause=usage-limit`,
@@ -193,58 +205,42 @@ implementation commit; runner gates this mechanically).
 5. **Close-out edits.** Update `docs/tdd/0011-detached-run-recovery.md`'s
    `Status:` line to `superseded by 0024 (formerly implemented;
    halt-taxonomy aspect superseded by 0018)`. Bump
-   `.claude-plugin/plugin.json` `3.10.1` → `3.10.2` (patch bump,
+   `.claude-plugin/plugin.json` `3.11.0` → `3.11.1` (patch bump,
    functional fix). Mechanical edits — no failing-test-first.
 
 ## Failure modes & edge cases
 
-- **Old paused fragment from before this TDD ships.** A fragment written by
-  the pre-TDD runner has `gates_completed: []` even if the build
+- **Old paused fragment from before this TDD ships.** Pre-TDD runner left
+  `gates_completed: []` + `cleared_step_log: []` even when the build
   successfully reached `BATCH_RESULT: OK` and was interrupted between
-  gates. On resume, the new code will re-run the build gate. The build
-  prompt's new resume-awareness bullet handles this — the LLM sees the
-  prior gate-1 commits and continues from where it left off (which, in
-  this case, is "nothing remaining" → it emits `BATCH_RESULT: OK`
-  immediately with no new commits, runner records `build` in
-  `gates_completed`, proceeds to gate 2). Cost: one extra `claude -p`
-  invocation for the old fragment population only; subsequent
-  fragments are correct by construction.
+  gates. The build re-runs; the prompt receives `{{CLEARED_STEPS}}: none`;
+  the LLM sees prior gate-1 commits and emits `BATCH_RESULT: OK`
+  immediately. Cost: one extra `claude -p` for legacy fragments only.
+- **Partially-committed step at the time of kill.** Build killed mid-step-N
+  (after step N's `feat:` commit but before its STEP_COMMIT sentinel +
+  per-step review). `cleared_step_log` lists 1..N-1; on resume the LLM
+  receives `{{CLEARED_STEPS}}: 1,…,N-1`, identifies step N as first
+  uncleared, extends or fixes its commits on top (no history rewrite).
 - **Build subprocess emits `BATCH_RESULT: OK` but `set_tdd_state` fails.**
-  The mirror handling at resume.sh:336/344/369 logs a warning and
-  continues. We follow the same pattern — log to stderr, do not abort.
-  The downstream gates will run anyway because they only check the
-  fragment's `status`, not its `gates_completed`. The cost is one
-  duplicate build re-run on a later resume (acceptable; an actual disk
-  fault is a documented edge case under FR-44).
-- **Concurrent paused fragments with mixed schemas.** A run with TDD A
-  paused before this TDD shipped and TDD B paused after. The same
-  `_resume_from` logic handles both — the pre-shipping TDD's fragment
-  has `gates_completed: []` (build re-runs, idempotent); the
-  post-shipping TDD's fragment has `gates_completed: ["build", …]`
-  (build is skipped). No fragment schema discrimination needed.
-- **Build branch carries `test(failing):` commits from a prior failed
-  TDD (combined mode).** This is the case TDD 0011 / iter-4 BLOCKER-1
-  worked around by skipping the test-first scan in combined mode. With
-  the test-first scan gone entirely (step 2), the combined-mode
-  workaround becomes unnecessary — `gates_completed` is per-TDD
-  fragment and unambiguous. The combined-mode branch in `_resume_from`
-  is simplified accordingly.
+  Log a warning and continue (mirrors resume.sh:336/344/369 for other
+  gates). Downstream gates only check `status`, not `gates_completed`,
+  so they run. Cost: one duplicate build re-run on a later resume.
+- **Concurrent paused fragments with mixed schemas.** Pre-shipping
+  fragment with `gates_completed: []` → build re-runs (idempotent);
+  post-shipping with `gates_completed: ["build", …]` → build is skipped.
+  No fragment schema discrimination needed.
+- **Combined mode: `test(failing):` ancestry from a prior failed TDD.**
+  TDD 0011 / iter-4 BLOCKER-1's combined-mode bypass becomes unnecessary
+  — `gates_completed` is per-TDD fragment; the combined-mode branch in
+  `_resume_from` simplifies accordingly.
 - **`stage=build` at pause but `gates_completed` contains `"build"`.**
-  An impossibility under the new contract (a successful build sets
-  `stage` forward to `test-first` before exiting gate 1's case). If it
-  ever happens (manual fragment mutation, disk corruption), the
-  divergence-guard / resume flow trusts `gates_completed` (per FR-40
-  revised) and treats build as done. `stage` is advisory display, not
-  authoritative gate completion.
-- **Legacy paused fragment carries `paused_cause=resume-blocked-build-state-missing`.**
-  An already-paused fragment created by the pre-this-TDD runner may
-  still hold this cause; see §Data & state for why read-side enum arms
-  are retained. On resume of such a fragment, the new `_resume_from`
-  reads `gates_completed` directly (independent of `paused_cause`),
-  finds it does not contain `build`, and re-runs the build gate.
-  Outcome is correct (build resumes from current branch state,
-  idempotent per the build prompt). The `paused_cause` label remains
-  stale-by-policy but is never re-displayed for any new fragment.
+  Impossible under the new contract (successful build advances `stage`
+  before exiting gate 1). If it happens (manual mutation, corruption),
+  resume trusts `gates_completed` per FR-40; `stage` is advisory only.
+- **Legacy paused fragment with `paused_cause=resume-blocked-build-state-missing`.**
+  The new `_resume_from` ignores the cause and reads `gates_completed`
+  directly — finds no `build` entry, re-runs the build gate. Outcome
+  correct; the stale label is never re-displayed for any new fragment.
 
 ## Verification plan
 
@@ -257,18 +253,19 @@ build log under `docs/tdd/.implement-logs/<runid>/<slug>.log`.
 1. **Build-completion recording.** Start a normal `/implement` build on a
    fresh TDD with no prior commits. After the runner observes
    `BATCH_RESULT: OK` and before gate 2 starts, read the per-TDD fragment.
-2. **Intra-build resume — `gates_completed` is empty pre-resume.**
-   Simulate an intra-build interruption (test fixture, not a real
-   ratelimit): paused fragment with `status=paused`, `gates_completed:[]`,
-   `stage=build`; build branch with 2 test-first+feat pairs but no
-   BATCH_RESULT line. Re-invoke `/implement --resume <runid>`. The runner
-   reads the fragment.
+2. **Intra-build resume — `gates_completed` empty pre-resume.**
+   Test fixture: paused fragment (`status=paused`, `gates_completed=[]`,
+   `stage=build`) + build branch with 2 test-first+feat pairs and no
+   BATCH_RESULT line. Re-invoke `/implement --resume <runid>`.
 3. **Intra-build resume — build re-runs and completes.** Same fixture.
    Watch the per-TDD log between the resume timestamp and the next gate's
    verdict.
 4. **Branch preservation across resume.** Same fixture. Compare
    `git rev-parse refs/heads/<branch>` before and after resume.
-5. **Build prompt resume-awareness.** Read `scripts/build-prompt.md`.
+5. **Build prompt structured cleared-step signal.** Render the build
+   prompt twice via `_per_step_review_loop`'s render path — once with an
+   empty `cleared_step_log` (fresh build) and once with a populated one
+   (resume). Compare the rendered prompt strings.
 
 **Expected observations (PASS):**
 
@@ -280,25 +277,26 @@ build log under `docs/tdd/.implement-logs/<runid>/<slug>.log`.
    substring `"build"`. Additionally, the `_resume_from` execution
    contains zero `git log --format=...` calls keyed off
    `^test\(failing\)` (the deleted Source-A scan's signature pattern) —
-   shellcheck or a test-stub for `git` can falsify either claim. Gate 1
+   a test stub for `git` falsifies the negative-call claim. Gate 1
    therefore re-runs on this fragment.
 3. The log shows new build output (a `claude -p` invocation with the
    build prompt) between the resume timestamp and the
    `BATCH_RESULT: OK` line; the next-gate verdict appears after that.
-4. The branch's HEAD SHA is unchanged from before the resume *up to* the
-   pre-resume commits — the build either added zero new commits (steps
-   were already complete) or appended new commits after the prior tip.
-   Specifically, the prior 2 test-first+feat pairs (4 commits) remain at
-   HEAD~N positions verbatim.
-5. The "Build discipline" section of `build-prompt.md` contains a bullet
-   with the literal phrases "RESUME" and "next undone step".
+4. The branch's pre-resume commits remain at HEAD~N positions verbatim;
+   the build either added zero new commits (already complete) or appended
+   new commits after the prior tip (no history rewrite).
+5. The fresh-build render contains the literal `{{CLEARED_STEPS}}` →
+   `none` substitution; the resume render contains the literal cleared
+   step IDs (e.g., `1,2,4`) as comma-separated text. The
+   `_cleared_steps_csv` helper returns `none` on empty input and a
+   CSV on populated input. Both are greppable in the rendered prompt.
 
 ## Requirement traceability
 
 | Requirement | Design element |
 |---|---|
 | FR-39 Interrupted-run detection | Carried forward from TDD 0011 §4 (paused-state detection); status.sh `--check-paused` shape unchanged. |
-| **FR-40 Gate-level resume (REVISED)** | Step 1 (record `build` in `gates_completed` on BATCH_RESULT: OK) + step 2 (drop test-first proxy; read from `gates_completed`) + step 3 (build prompt resume-awareness). **Acceptance (a) inter-gate resume — observable behavior unchanged from TDD 0011 §6, but the implementation mechanism is materially different.** Pre-this-TDD: in sequential mode, `_resume_from` *infers* gate-1 completion from the existence of a `test(failing):` commit in `merge-base(integration, branch)..branch` (Source A). Post-this-TDD: `_resume_from` reads `gates_completed` directly; a fragment created post-shipping by a build that emitted `BATCH_RESULT: OK` carries `gates_completed: ["build", ...]`, so gate 1 is correctly skipped. A fragment created pre-shipping (legacy) carries `gates_completed: []`, so on a post-shipping resume gate 1 *re-runs* — which is also correct (build prompt resume-awareness handles the legacy case with zero new commits when the prior build had completed cleanly). **Acceptance (b) intra-build resume:** covered by Verification plan observations 2–4. |
+| **FR-40 Gate-level resume (REVISED)** | Step 1 (record `build` in `gates_completed` on BATCH_RESULT: OK) + step 2 (drop Source-A proxy; read `gates_completed`) + step 3 (structured `{{CLEARED_STEPS}}` interpolation). **(a) Inter-gate resume:** observable behavior unchanged from TDD 0011 §6; mechanism materially different — pre-this-TDD infers gate-1 completion from `test(failing):` ancestry, post-this-TDD reads `gates_completed`. Legacy fragments without `build` re-run gate 1 correctly via `{{CLEARED_STEPS}}: none`. **(b) Intra-build resume:** structured cleared-step list (not LLM-inferred); covered by Verification plan observations 2–5. |
 | FR-41 Recoverable-cause classification | Carried forward from TDD 0011 §5 (`_classify_cause`, `_recoverable_patterns`). PR #51 (May 2026) added the `hit your session limit` pattern; this TDD makes no further classifier change. |
 | FR-42 Bounded in-gate retry | Carried forward from TDD 0011 §5 (`_retry_in_gate`, retry budget, transient handling). Unchanged. |
 | FR-43 Stale single-run lock reclaim | Carried forward from TDD 0011 §8 (lock reclaim). Unchanged. |
@@ -340,19 +338,21 @@ introducing a cross-cutting decision worth elevating.
 ## Touched files
 
 - `scripts/lib/resume.sh` — gate-1 completion recording (case `*OK*) ...`); drop test-first-commit proxy in `_resume_from`; preserve divergence guard
-- `scripts/lib/gates.sh` — (no direct change expected; the `_build_one_gated` helper is unchanged) — listed only if a follow-on edit emerges
-- `scripts/build-prompt.md` — add one bullet to "Build discipline" naming the RESUME contract
+- `scripts/lib/gates.sh` — add `_cleared_steps_csv <slug>` helper; extend `_per_step_review_loop`'s prompt render (gates.sh:407) to substitute `{{CLEARED_STEPS}}`
+- `scripts/build-prompt.md` — add `{{CLEARED_STEPS}}` placeholder + RESUME SIGNAL bullet under "Build discipline"
 - `tests/run-recovery.test.sh` — extend gate-completion assertions; add intra-build interruption fixture
+- `tests/continuous-in-build-review.test.sh` — add `_cleared_steps_csv` unit tests + render-time interpolation assertions (fresh vs resume)
 - `docs/tdd/0011-detached-run-recovery.md` — Status line update only (`superseded by 0024 (formerly implemented; halt-taxonomy aspect superseded by 0018)`); body unchanged
-- `.claude-plugin/plugin.json` — version bump `3.10.1` → `3.10.2`
+- `.claude-plugin/plugin.json` — version bump `3.11.0` → `3.11.1`
 
 ## Expected diff size
 
-- `scripts/lib/resume.sh` — 90 lines (≈70 lines removed from the test-first scan + combined-mode bypass + degraded-evidence refuse; ≈20 lines added: gate-1 completion recording + a comment block citing FR-40)
-- `scripts/lib/gates.sh` — 5 lines (placeholder; may be 0 if the change lands entirely in resume.sh)
-- `scripts/build-prompt.md` — 10 lines (one new bullet, indented to match the existing style)
-- `tests/run-recovery.test.sh` — 80 lines (≈30 lines extending existing gate-completion assertions for `build`; ≈50 lines for the new intra-build interruption fixture, matching the existing `[2.x]` block style)
-- `docs/tdd/0011-detached-run-recovery.md` — 1 line (Status line)
+- `scripts/lib/resume.sh` — 90 lines (≈70 removed Source-A scan + combined-mode bypass + no-merge-base refuse; ≈20 added: gate-1 completion recording + FR-40 comment)
+- `scripts/lib/gates.sh` — 25 lines (`_cleared_steps_csv` helper + render-time substitution at `_per_step_review_loop`)
+- `scripts/build-prompt.md` — 12 lines (one new bullet w/ placeholder)
+- `tests/run-recovery.test.sh` — 80 lines (gate-completion assertions for `build` + intra-build fixture)
+- `tests/continuous-in-build-review.test.sh` — 40 lines (one new `[F1]` block: `_cleared_steps_csv` over empty/populated fragments + render-time substitution)
+- `docs/tdd/0011-detached-run-recovery.md` — 1 line (Status)
 - `.claude-plugin/plugin.json` — 1 line (version bump)
 
-Total expected diff: 187 lines across 6 files.
+Total expected diff: 249 lines across 7 files.

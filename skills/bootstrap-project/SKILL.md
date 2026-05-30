@@ -18,8 +18,19 @@ already bootstrapped. Source the helpers from the plugin and read the committed
 repo marker (from the repo root):
 
 ```bash
-source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/repo-id.sh"
-source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/markers.sh"
+# The short-circuit DEPENDS on these helpers: if a helper cannot be sourced
+# (wrong/unset CLAUDE_PLUGIN_ROOT), tl_repo_marker_read becomes "command not
+# found", $applied reads empty, and an unguarded block would fall through to a
+# full re-bootstrap of an already-bootstrapped repo — silently bypassing FR-31.
+# Fail loudly instead so the operator fixes the path and re-runs.
+source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/repo-id.sh" || {
+  echo "bootstrap: could not source scripts/lib/repo-id.sh from \${CLAUDE_PLUGIN_ROOT} — cannot read the bootstrap marker to check for a prior run; fix the plugin path and re-run" >&2
+  return 1 2>/dev/null || exit 1
+}
+source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/markers.sh" || {
+  echo "bootstrap: could not source scripts/lib/markers.sh from \${CLAUDE_PLUGIN_ROOT} — cannot read the bootstrap marker to check for a prior run; fix the plugin path and re-run" >&2
+  return 1 2>/dev/null || exit 1
+}
 marker="$(tl_repo_marker_read)"   # the marker JSON, or "{}" if absent/malformed
 applied="$(printf '%s\n' "$marker" | sed -n 's/.*"plugin_version_applied"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 language="$(printf '%s\n' "$marker" | sed -n 's/.*"language"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
@@ -145,12 +156,16 @@ When the project is empty:
    test.
 4. Confirm the `format-and-lint` hook is active (it ships with this plugin).
 5. Create the design-doc scaffold above.
-6. Record the bootstrap markers + `.gitignore` entry — see **On completion —
-   record the bootstrap markers** below. Do this *before* the initial commit so
-   the marker and `.gitignore` are part of it.
-7. Initialize git and make an initial commit on `main` (the integration branch
-   that phase-gate PRs merge into) once setup is complete.
-8. Report what was installed, configured, and scaffolded.
+6. Initialize git on `main` (the integration branch that phase-gate PRs merge
+   into) — run `git init` only; do **not** make the initial commit yet. This
+   must happen *before* the next step: the marker/`.gitignore` helpers resolve
+   the repo root via `git rev-parse --show-toplevel`, which aborts on a repo
+   that has not been `git init`-ed.
+7. Record the bootstrap markers + `.gitignore` entry — see **On completion —
+   record the bootstrap markers** below.
+8. Make the initial commit on `main`, including the marker and `.gitignore`
+   alongside the rest of the setup.
+9. Report what was installed, configured, and scaffolded.
 
 ## On completion — record the bootstrap markers
 

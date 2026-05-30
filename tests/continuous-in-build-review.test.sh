@@ -699,6 +699,40 @@ echo "[F2] _per_step_review_loop fails loud (rc≠0, log diagnostic) when _rende
     || bad "must not fabricate BATCH_RESULT when the prompt failed to render"
 ) || true
 
+# --- §rerun-1 robustness: the rework-loop's verdict-detection regex must
+#     match a REVIEW_RESULT line wrapped in markdown backticks. The reviewer
+#     on this branch's prior pass emitted the verdict as
+#     `REVIEW_RESULT: BLOCK ...` (single inline-code backticks), which the
+#     strict `^REVIEW_RESULT:` anchor missed — the runner then classified
+#     the BLOCK verdict as "no fresh verdict (rc=1)" and skipped the bounded
+#     rework loop entirely. NFR-4: a real verdict must never be silently
+#     discarded just because the reviewer styled it as markdown code.
+echo "[F3] _fresh_review_verdict helper extracts a backtick-wrapped REVIEW_RESULT verdict (review-rerun-1)"
+( D="$ROOT/F3"; mkdir -p "$D"; cd "$D" || { bad "cd failed"; exit 0; }
+  TDDS=()
+  THROUGHLINE_SOURCE_ONLY=1 source "$IMPL" || { bad "source guard missing"; exit 0; }
+  # Reproduces what the reviewer emitted on 0024 review-rerun-1: a single-
+  # backtick markdown-inline verdict. The strict `^REVIEW_RESULT:` anchor on
+  # _rework_loop's verdict-detection missed it → fatal-classified instead of
+  # rework-triggering. NFR-4: a real verdict must never be silently discarded.
+  cat > "$D/slice.log" <<'EOF'
+some prose before the verdict
+`REVIEW_RESULT: BLOCK MAJOR-1 (...) and MAJOR-2 (...)`
+some prose after
+EOF
+  if ! command -v _fresh_review_verdict >/dev/null 2>&1; then
+    bad "_fresh_review_verdict helper missing (extract it from _rework_loop so verdict-detection is testable)"
+  else
+    verdict="$(_fresh_review_verdict "$D/slice.log" 0)"
+    [ -n "$verdict" ] && ok "_fresh_review_verdict matches a backtick-wrapped REVIEW_RESULT line" \
+      || bad "_fresh_review_verdict must match \`REVIEW_RESULT: ...\` (got empty)"
+    rs="$(review_status "$D/slice.log")"
+    case "$rs" in *BLOCK*) ok "review_status extracts BLOCK downstream from a backticked verdict" ;;
+                  *)       bad "review_status should still see BLOCK (got '$rs')" ;;
+    esac
+  fi
+) || true
+
 echo
 PASS="$(grep -c '^ok$'   "$RESULTS" 2>/dev/null)"; PASS="${PASS:-0}"
 FAIL="$(grep -c '^fail$' "$RESULTS" 2>/dev/null)"; FAIL="${FAIL:-0}"

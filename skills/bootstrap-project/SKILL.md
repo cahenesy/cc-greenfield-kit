@@ -115,6 +115,22 @@ Create the structure the PRD/TDD/ADR pipeline expects, if absent:
   is **transient input** that throughline ingests but never treats as authoritative
   or relocates. Leave any existing `docs/superpowers/` content untouched.
 
+## Brownfield completion checklist
+
+A brownfield run touches less than a greenfield one, but it still ends the same
+way. After you have resolved the linter/formatter and test-framework questions
+above and created any missing design-doc scaffold:
+
+1. Record the bootstrap markers + `.gitignore` entry — run the **On completion —
+   record the bootstrap markers** step below. This is **not** greenfield-only:
+   record the marker even when you installed nothing (so re-runs short-circuit
+   at Step 0 and the reconcile hook can track the version). Set
+   `<steps-csv>` to whatever you actually applied — often just `scaffold`, or an
+   empty CSV if the repo already had everything.
+2. Commit the marker and `.gitignore` change with your other edits (do not
+   `git init` an existing repo).
+3. Report what you used, configured, and scaffolded.
+
 ## Greenfield initialization checklist
 
 When the project is empty:
@@ -134,9 +150,13 @@ When the project is empty:
 
 ## On completion — record the bootstrap markers
 
-After a successful bootstrap (greenfield, or a brownfield run that installed or
-configured anything), record both markers so re-runs short-circuit at Step 0 and
-the post-update reconcile hook can track the version. Run, from the repo root:
+After **any** successful bootstrap run — greenfield or brownfield, and whether
+or not it installed or changed anything — record both markers so re-runs
+short-circuit at Step 0 and the post-update reconcile hook can track the
+version. A brownfield repo that already had its tooling still completes a
+bootstrap: record the marker with whatever `repo_steps_applied` were actually
+performed (often just `scaffold`, sometimes an empty CSV). Run, from the repo
+root:
 
 ```bash
 source "${CLAUDE_PLUGIN_ROOT}/scripts/lib/gitignore.sh"

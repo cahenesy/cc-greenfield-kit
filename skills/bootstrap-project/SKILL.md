@@ -197,7 +197,14 @@ ver="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
         "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" | head -n1)"
 
 # FR-32: ignore throughline's per-run artifacts (idempotent, byte-stable).
-tl_gitignore_add_line "docs/tdd/.implement-logs/"
+# Required step: if this write fails its return value must NOT be swallowed —
+# otherwise the repo-marker write below would mark bootstrap "complete" while
+# docs/tdd/.implement-logs/ stays un-ignored, failing TDD 0009 verification
+# step 3 (git check-ignore). Abort loudly (no marker) instead.
+tl_gitignore_add_line "docs/tdd/.implement-logs/" || {
+  echo "bootstrap: failed to add docs/tdd/.implement-logs/ to .gitignore — FR-32 requires this ignore entry; markers NOT recorded" >&2
+  return 1 2>/dev/null || exit 1
+}
 
 # Guard: a marker with an empty plugin_version_applied is silent corruption —
 # Step 0 reads the field as empty and never short-circuits, so re-runs

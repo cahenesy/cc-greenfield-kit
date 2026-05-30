@@ -672,6 +672,33 @@ echo "[F1] _cleared_steps_csv + {{CLEARED_STEPS}} render: none on a fresh build,
     || bad "render must still substitute {{TDD}}"
 ) || true
 
+# --- §rerun-1 review finding MAJOR-1: _per_step_review_loop must fail loud
+#     when _render_build_prompt fails. Without this, a missing template
+#     produces an empty prompt + claude -p invocation + no BATCH_RESULT +
+#     misleading FAIL with no error trail in the gate log (NFR-4 honesty).
+echo "[F2] _per_step_review_loop fails loud (rc≠0, log diagnostic) when _render_build_prompt fails"
+( D="$ROOT/F2"; mkdir -p "$D/state.d"; cd "$D" || { bad "cd failed"; exit 0; }
+  export STATE_DIR="$D/state.d" STATE_STARTED_AT=1000 STATE_MODE="sequential" INTEGRATION="master" CHANGE="ci" LOGDIR="$D"
+  # Point TMPL at a path that doesn't exist so _render_build_prompt fails
+  # at the existence check (rc=1, stderr diagnostic).
+  export TMPL="$D/nonexistent-build-prompt.md"
+  TDDS=()
+  THROUGHLINE_SOURCE_ONLY=1 source "$IMPL" || { bad "source guard missing"; exit 0; }
+  _write_tdd_fragment 0024-fix 24 docs/tdd/0024-fix.md 1 building build 1000 1000 "feat/0024-fix" "" log "" "" "" "" "" "" "" "" "" "" "" ""
+  _per_step_review_loop 0024-fix docs/tdd/0024-fix.md "$D/f2.log" 2>/dev/null; rc=$?
+  [ "$rc" -ne 0 ] && ok "_per_step_review_loop returns non-zero when the build prompt cannot render" \
+    || bad "_per_step_review_loop must NOT proceed with an empty prompt (rc=$rc)"
+  # The gate log MUST carry the rendering-failure diagnostic — runner bash
+  # stderr goes to nohup.out, but a triage reading the per-TDD log needs
+  # the cause IN-BAND. (Reviewer's MAJOR-1 specifically.)
+  grep -qiE 'render.*build.*prompt|build.*prompt.*render|template.*not.*found' "$D/f2.log" 2>/dev/null \
+    && ok "gate log carries the rendering-failure diagnostic" \
+    || bad "gate log should name the rendering failure so a triage reading the durable artifact can see it"
+  ! grep -q 'BATCH_RESULT' "$D/f2.log" 2>/dev/null \
+    && ok "no fabricated BATCH_RESULT — gate fails honestly" \
+    || bad "must not fabricate BATCH_RESULT when the prompt failed to render"
+) || true
+
 echo
 PASS="$(grep -c '^ok$'   "$RESULTS" 2>/dev/null)"; PASS="${PASS:-0}"
 FAIL="$(grep -c '^fail$' "$RESULTS" 2>/dev/null)"; FAIL="${FAIL:-0}"

@@ -265,6 +265,54 @@ echo "[K] a failed repo-marker write aborts the completion block"
   fi
 ) || bad "[K] repo-marker-failure case aborted before recording a verdict"
 
+# --- [L] Step 0 must fail loudly when its helpers cannot be sourced -----------
+# Mirror of [J] for the READ side. Step 0's `source` lines are what make the
+# FR-31 short-circuit possible; if CLAUDE_PLUGIN_ROOT is wrong they fail and
+# tl_repo_marker_read becomes "command not found", leaving $applied empty. An
+# unguarded block then exits 0 with applied="", so the skill skips the "already
+# bootstrapped" short-circuit and silently RE-bootstraps a repo that was already
+# set up (installs, scaffolds, git init). The block must fail loudly (non-zero)
+# so the operator fixes the path instead.
+echo "[L] Step 0 fails loudly when a helper cannot be sourced (no silent re-bootstrap)"
+( blk="$(extract_step0_block)"
+  if [ -z "$blk" ]; then
+    bad "[L] no Step 0 marker-read block (with tl_repo_marker_read) found"
+  else
+    R="$(mkrepo "$ROOT/l")"
+    # Plugin root with NO scripts/lib -> every Step 0 source fails.
+    EMPTY="$ROOT/l-empty"; mkdir -p "$EMPTY"
+    printf '%s' "$blk" > "$ROOT/l.sh"
+    ( cd "$R" && CLAUDE_PLUGIN_ROOT="$EMPTY" bash "$ROOT/l.sh" ) >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      ok "Step 0 exits non-zero when its helpers cannot be sourced"
+    else
+      bad "Step 0 exited 0 with unsourceable helpers — FR-31 short-circuit silently bypassed"
+    fi
+  fi
+) || bad "[L] Step 0 source-failure case aborted before recording a verdict"
+
+# --- [M] greenfield inits git BEFORE recording the markers -------------------
+# tl_repo_marker_write (via _tl_repo_marker_file) and tl_gitignore_add_line both
+# resolve the repo root with `git rev-parse --show-toplevel`; on a fresh
+# greenfield repo that aborts until `git init` has run. The greenfield checklist
+# must therefore order git-init ahead of the marker-recording step, or TDD 0009
+# verification step 1 (marker + .gitignore present on a fresh empty repo) fails.
+echo "[M] greenfield checklist inits git before recording the markers"
+ord="$(awk '
+    /^## Greenfield/{ing=1; next}
+    ing && /^## /{ing=0}
+    ing && /([Ii]nitialize git|git init)/ && !i {print "INIT", NR; i=1}
+    ing && /[Rr]ecord the bootstrap markers/ && !r {print "REC", NR; r=1}
+  ' "$SKILL")"
+init_n="$(printf '%s\n' "$ord" | awk '/^INIT/{print $2}')"
+rec_n="$(printf '%s\n' "$ord" | awk '/^REC/{print $2}')"
+if [ -n "$init_n" ] && [ -n "$rec_n" ] && [ "$init_n" -lt "$rec_n" ]; then
+  ok "git init (line $init_n) precedes marker recording (line $rec_n)"
+else
+  bad "greenfield records markers before git init (init=$init_n rec=$rec_n) — aborts on a fresh repo"
+fi
+
 echo
 PASS="$(grep -c '^ok$'   "$RESULTS" 2>/dev/null)"; PASS="${PASS:-0}"
 FAIL="$(grep -c '^fail$' "$RESULTS" 2>/dev/null)"; FAIL="${FAIL:-0}"

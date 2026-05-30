@@ -39,9 +39,89 @@ build_one() {  # <tdd> <log>
   fi
   return "$_rc"   # TDD 0011 / BL-2: preserve claude's exit code (incl. signals like 143)
 }
+# _review_prior_patterns_csv <slug> (TDD 0020 / FR-59) — flatten + dedup every
+# pattern_tag recorded across the TDD's cleared_step_log into a CSV. Feeds the
+# review prompt's "Prior addressed patterns" interpolation so a later pass can
+# flag a recurrence (FR-59). Empty when there is no fragment or no tags yet.
+_review_prior_patterns_csv() {  # <slug>
+  # Split the `local` declaration: under bash 5.3 `set -u`, a single
+  # `local slug="$1" f="…$slug…"` raises 'slug: unbound variable' (the f
+  # initializer expands $slug before the local has bound it — see state.sh).
+  local slug="$1" log f
+  f="${STATE_DIR:-}/$slug.json"
+  { [ -z "${STATE_DIR:-}" ] || [ ! -f "$f" ]; } && return 0
+  log="$(_read_fragment_cleared_log "$f")"
+  { [ -z "$log" ] || [ "$log" = "[]" ]; } && return 0
+  # Each cleared-step entry's pattern_tags is a flat string array, so the inner
+  # `[^]]*` match is safe here (unlike the outer log, which nests).
+  printf '%s' "$log" \
+    | grep -aoE '"pattern_tags":\[[^]]*\]' \
+    | grep -aoE '"[^"]+"' \
+    | tr -d '"' \
+    | awk 'NF && !seen[$0]++' \
+    | paste -sd, -
+}
+
+# _render_review_prompt <tdd> <scope-base> <scope-head> <branch> <prior-tags-csv>
+# (TDD 0020 / FR-57, FR-59) — interpolate the review prompt template's scope +
+# prior-patterns placeholders. Used by BOTH the per-step review (scope =
+# <last-cleared>..<step-sha>) and the consolidated/rework review (scope =
+# <build-start>..HEAD). Substitution is bash parameter expansion (not sed) so a
+# branch name's `/` or a tag's punctuation cannot break a sed delimiter; the
+# model-derived prior tags are substituted LAST so they cannot double-expand a
+# literal `{{...}}`. Echoes the rendered prompt.
+_render_review_prompt() {  # <tdd> <scope-base> <scope-head> <branch> <prior-tags-csv>
+  local tdd="$1" sbase="$2" shead="$3" branch="$4" prior_csv="${5:-}" tmpl prompt prior_disp
+  tmpl="${RTMPL:-}"
+  [ -z "$tmpl" ] && tmpl="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/review-prompt.md"
+  if [ ! -f "$tmpl" ]; then
+    echo "error: _render_review_prompt: review prompt template not found ($tmpl)" >&2
+    return 1
+  fi
+  if [ -z "$prior_csv" ]; then prior_disp="none"; else prior_disp="${prior_csv//,/, }"; fi
+  prompt="$(cat "$tmpl")"
+  prompt="${prompt//\{\{TDD\}\}/$tdd}"
+  prompt="${prompt//\{\{BASE\}\}/$sbase}"
+  prompt="${prompt//\{\{SCOPE_BASE\}\}/$sbase}"
+  prompt="${prompt//\{\{SCOPE_HEAD\}\}/$shead}"
+  prompt="${prompt//\{\{BRANCH\}\}/$branch}"
+  prompt="${prompt//\{\{PRIOR_PATTERNS\}\}/$prior_disp}"
+  printf '%s' "$prompt"
+}
+
+# _extract_pattern_tags <review-log> [<pre-log-size>] (TDD 0020 / FR-59) — pull
+# the `pattern_tags: [a, b, …]` lines a review pass emits per finding into a
+# distinct CSV. A pure awk/sed pass (no model call) per §3. The optional
+# pre-log-size scopes the scan to the current pass's appended slice (same
+# technique as _rework_extract_finding) so a stale tag line from a prior
+# iteration is not re-harvested.
+_extract_pattern_tags() {  # <review-log> [<pre-log-size>]
+  local log="$1" pre="${2:-0}" content
+  if [ "$pre" -gt 0 ] 2>/dev/null; then
+    content="$(tail -c +"$((pre + 1))" "$log" 2>/dev/null)"
+  else
+    content="$(cat "$log" 2>/dev/null)"
+  fi
+  printf '%s\n' "$content" \
+    | grep -aoE 'pattern_tags:[[:space:]]*\[[^]]*\]' \
+    | sed -E 's/.*\[([^]]*)\].*/\1/' \
+    | tr ',' '\n' \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+    | awk 'NF && !seen[$0]++' \
+    | paste -sd, -
+}
+
 review_one() {  # <tdd> <base-ref> <log>
-  local tdd="$1" base="$2" log="$3" prompt
-  prompt="$(sed -e "s#{{TDD}}#${tdd}#g" -e "s#{{BASE}}#${base}#g" "$RTMPL")"
+  local tdd="$1" base="$2" log="$3" slug branch prior prompt
+  slug="$(basename "$tdd" .md)"
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  prior="$(_review_prior_patterns_csv "$slug")"
+  # Consolidated/rework review scope is <build-start-base>..HEAD; the per-step
+  # review (TDD 0020 §2) renders the same template with a tighter <cleared>..<sha>.
+  if ! prompt="$(_render_review_prompt "$tdd" "$base" "HEAD" "$branch" "$prior")"; then
+    echo "error: review_one: could not render review prompt for $tdd" >>"$log"
+    return 1
+  fi
   local args=(-p "$prompt" --permission-mode auto); [ -n "$REVIEW_MODEL" ] && args+=(--model "$REVIEW_MODEL")
   local start _rc; start=$(date +%s); _rc=0
   claude "${args[@]}" >>"$log" 2>&1; _rc=$?
@@ -232,9 +312,196 @@ install_deps() {  # <log>
 # the raw rc is what classifies the cause. Order: if exit was non-zero,
 # return it (preserves signal); else if verdict is good, return 0; else
 # return 1 (generic non-signal failure).
+# === Continuous in-build review: multi-turn build coprocess (TDD 0020 §2) ======
+# The build gate switches from single-shot `claude -p` to a multi-turn coprocess
+# speaking stream-json (FR-56). The runner reads the build's stdout events, and
+# on each `STEP_COMMIT: <step-id> <sha>` sentinel runs a SCOPED per-step review
+# (FR-57) and writes a `STEP_REVIEW: PASS|BLOCK` reply onto the build's stdin so
+# the build only advances to the next Sequencing item once the prior one cleared.
+# A sentinel-less build degrades gracefully to end-of-build review (the per-step
+# loop is a no-op, the final consolidated gate-4 review catches everything).
+# Only the build gate is multi-turn; review/verify/rework stay single-shot.
+
+# _extract_event_text <event-line> — pull the assistant text content out of a
+# stream-json message event (empty for non-message / tool-only events). For a
+# non-JSON line — the single-shot stub / degraded path emits sentinels as bare
+# lines — the raw line is returned so plain-text sentinels are still seen. Used
+# to confirm a STEP_COMMIT/BATCH_RESULT sentinel sits in the model's CONTENT, not
+# merely in some tool-call JSON the model never "said".
+_extract_event_text() {  # <event-line>
+  local evt="$1"
+  [ -z "$evt" ] && return 0
+  if command -v jq >/dev/null 2>&1 && printf '%s' "$evt" | jq -e 'type=="object"' >/dev/null 2>&1; then
+    printf '%s' "$evt" | jq -r '(.message.content? // empty) as $c
+      | if ($c|type)=="array" then ([ $c[] | select(.type=="text") | .text ] | join("\n"))
+        elif ($c|type)=="string" then $c
+        else "" end' 2>/dev/null
+    return 0
+  fi
+  printf '%s' "$evt"
+}
+
+# _user_turn_json <text> — wrap a STEP_REVIEW reply as the stream-json shape a
+# new user turn requires on the build's stdin.
+_user_turn_json() {  # <text>
+  printf '{"type":"user","message":{"role":"user","content":"%s"}}' "$(json_escape "$1")"
+}
+
+# _run_per_step_review <slug> <tdd> <step-id> <sha> <build-start-sha> <main-log>
+# Run ONE scoped review pass for a step commit. Diff range = the TDD's
+# last_cleared_review_sha (or the build-start SHA if none cleared yet) to <sha>
+# — so cleared code is never re-evaluated (FR-57). On REVIEW_RESULT: PASS it
+# harvests the emitted pattern_tags, appends a cleared_step_log entry + advances
+# last_cleared_review_sha (FR-59 / ADR 0006), and ECHOES `STEP_REVIEW: PASS`. On
+# BLOCK (or no verdict — NFR-4: never a false PASS) it echoes `STEP_REVIEW: BLOCK
+# <summary>` so the build reworks the cited finding in its next turn. Every
+# diagnostic goes to the per-step review log; only the verdict line is echoed
+# (the caller captures it).
+_run_per_step_review() {  # <slug> <tdd> <step-id> <sha> <build-start-sha> <main-log>
+  local slug="$1" tdd="$2" step_id="$3" sha="$4" build_start="$5" mainlog="$6"
+  local f="${STATE_DIR:-}/$slug.json" base branch prior prompt rlog rs tags start
+  base="$(_read_fragment_field "$f" last_cleared_review_sha 2>/dev/null || true)"
+  [ -z "$base" ] && base="$build_start"
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  prior="$(_review_prior_patterns_csv "$slug")"
+  rlog="$(dirname "$mainlog")/${slug}.step${step_id}.review.log"
+  if ! prompt="$(_render_review_prompt "$tdd" "$base" "$sha" "$branch" "$prior")"; then
+    printf 'STEP_REVIEW: BLOCK per-step review prompt render failed\n'
+    return 0
+  fi
+  local args=(-p "$prompt" --permission-mode auto); [ -n "${REVIEW_MODEL:-}" ] && args+=(--model "$REVIEW_MODEL")
+  start=$(date +%s)
+  printf '=== per-step review: step %s scope %s..%s ===\n' "$step_id" "$base" "$sha" >> "$rlog"
+  claude "${args[@]}" >>"$rlog" 2>&1
+  record_session_pointer "$rlog" "$start"
+  rs="$(review_status "$rlog")"
+  case "$rs" in
+    *PASS*)
+      tags="$(_extract_pattern_tags "$rlog")"
+      _record_cleared_step "$slug" "$step_id" "$base" "$sha" "$tags" \
+        || echo "warning: _run_per_step_review: _record_cleared_step failed for $slug step $step_id" >> "$rlog"
+      printf 'STEP_REVIEW: PASS\n'
+      ;;
+    *BLOCK*)
+      printf 'STEP_REVIEW: BLOCK %s\n' "$(printf '%s' "$rs" | sed 's/REVIEW_RESULT: BLOCK *//')"
+      ;;
+    *)
+      printf 'STEP_REVIEW: BLOCK per-step review produced no REVIEW_RESULT line\n'
+      ;;
+  esac
+}
+
+# _per_step_review_loop <slug> <tdd> <log> — drive the multi-turn build coprocess
+# (§"Build subprocess protocol"). Reads the build's stream-json stdout line by
+# line, intercepts STEP_COMMIT sentinels (→ per-step review → STEP_REVIEW reply
+# on stdin), tolerates malformed events, and is bounded by two watchdogs: an
+# inter-event `read -t` timeout (deadlock/hang) and an overall `timeout` wrap
+# (THROUGHLINE_BUILD_TIMEOUT). Returns claude's effective exit code: 0 on a clean
+# build (BATCH_RESULT in the mirrored log), 124 on the overall watchdog, 143 on
+# the inter-event-timeout kill — both of which _classify_cause maps to transient
+# (NFR-4), so the existing pause/resume flow takes over without fabricating a
+# verdict. The build branch keeps its commits across either timeout.
+_per_step_review_loop() {  # <slug> <tdd> <log>
+  local slug="$1" tdd="$2" log="$3"
+  local prompt build_start inter overall model errlog start
+  prompt="$(sed "s#{{TDD}}#${tdd}#g" "$TMPL")"
+  build_start="$(git rev-parse HEAD 2>/dev/null || echo "")"
+  inter="${THROUGHLINE_BUILD_INTER_EVENT_TIMEOUT:-600}"; case "$inter" in ''|*[!0-9]*) inter=600 ;; esac
+  overall="${THROUGHLINE_BUILD_TIMEOUT:-7200}"
+  model="${MODEL:-}"
+  errlog="${log%.log}.build.err"; [ "$errlog" = "$log" ] && errlog="$log.build.err"
+  start=$(date +%s)
+  # Overall watchdog (issue #28A): 0/unlimited/non-numeric handling. A real
+  # build that streams steadily but never converges to BATCH_RESULT is killed at
+  # the wall-clock cap regardless of inter-event activity.
+  local -a tocmd=()
+  case "$overall" in
+    0|unlimited|'') : ;;
+    *[!0-9]*) tocmd=(timeout 7200) ;;
+    *) tocmd=(timeout "$overall") ;;
+  esac
+  # --disallowed-tools AskUserQuestion (issue #28A): runner-level belt-and-
+  # suspenders for the prompt-level prohibition — the unattended build cannot
+  # hang on a question nobody will answer.
+  local -a ccmd=(claude -p "$prompt" --input-format stream-json --output-format stream-json --permission-mode auto --disallowed-tools AskUserQuestion)
+  [ -n "$model" ] && ccmd+=(--model "$model")
+  coproc BUILD { "${tocmd[@]}" "${ccmd[@]}" 2>>"$errlog"; }
+  local bpid="$BUILD_PID" build_in build_out
+  exec {build_in}>&"${BUILD[1]}"
+  exec {build_out}<&"${BUILD[0]}"
+  # NOTE: capture read's status INSIDE the loop. `read_rc=$?` after a
+  # `while read; do …; done` would read the WHILE loop's status (0 on normal
+  # exit), NOT the failing read's — so a `read -t` timeout (>128) would be
+  # indistinguishable from EOF and the deadlock path (§8) would never fire.
+  local evt text step_id sha verdict read_rc=0
+  while :; do
+    # Capture read's OWN status directly — NOT via `if ! read; then read_rc=$?`,
+    # where `$?` would be the negated `!` result (0 when read failed), hiding the
+    # >128 timeout code the deadlock path (§8) needs.
+    IFS= read -r -t "$inter" evt <&"${build_out}"; read_rc=$?
+    [ "$read_rc" -ne 0 ] && break
+    printf '%s\n' "$evt" >> "$log"
+    case "$evt" in
+      *"STEP_COMMIT: "*|*"BATCH_RESULT: "*)
+        text="$(_extract_event_text "$evt")"
+        case "$text" in
+          *"STEP_COMMIT: "*)
+            step_id="$(printf '%s' "$text" | grep -aoE 'STEP_COMMIT:[[:space:]]+[0-9]+[[:space:]]+[^[:space:]]+' | tail -1 | awk '{print $2}')"
+            sha="$(printf '%s' "$text"     | grep -aoE 'STEP_COMMIT:[[:space:]]+[0-9]+[[:space:]]+[^[:space:]]+' | tail -1 | awk '{print $3}')"
+            if [ -n "$step_id" ] && [ -n "$sha" ]; then
+              verdict="$(_run_per_step_review "$slug" "$tdd" "$step_id" "$sha" "$build_start" "$log")"
+              printf '%s\n' "$verdict" >> "$log"
+              printf '%s\n' "$(_user_turn_json "$verdict")" 1>&"${build_in}" 2>/dev/null || true
+            fi
+            ;;
+          *"BATCH_RESULT: "*) : ;;   # mirrored above; keep draining to EOF for the full final turn
+        esac
+        ;;
+      *)
+        # Malformed stream-json tolerance (§9): a non-sentinel line that is not a
+        # well-formed JSON event is logged + skipped; the loop continues.
+        if [ -n "$evt" ] && command -v jq >/dev/null 2>&1; then
+          printf '%s' "$evt" | jq -e . >/dev/null 2>&1 || printf 'WARNING: malformed stream-json event\n' >> "$log"
+        fi
+        ;;
+    esac
+  done
+  # Close our writer first so a still-living subprocess waiting on stdin sees EOF.
+  exec {build_in}>&- 2>/dev/null || true
+  # Inter-event timeout with the subprocess still alive = deadlock/hang (§8):
+  # kill ONLY the PID we spawned (never a pattern) so `wait` reports the signal
+  # and _classify_cause routes it to transient.
+  if [ "$read_rc" -gt 128 ] && kill -0 "$bpid" 2>/dev/null; then
+    kill "$bpid" 2>/dev/null || true
+    printf 'THROUGHLINE_BUILD_HANG: inter-event read timed out after %ss; killed build pid %s (transient)\n' "$inter" "$bpid" >> "$log"
+  fi
+  local wrc=0
+  wait "$bpid" 2>/dev/null; wrc=$?
+  exec {build_out}<&- 2>/dev/null || true
+  # FR-36 session pointer + FR-68 original-build token spend (as build_one did).
+  record_session_pointer "$log" "$start"
+  if [ -n "${STATE_DIR:-}" ] && [ -f "$STATE_DIR/$slug.json" ]; then
+    _set_build_attempt_token_spend "$slug" "$(_extract_token_spend "$(_last_session_path "$start")")"
+  fi
+  # Overall watchdog fired: `timeout` exits 124. Record build-overall-timeout so
+  # triage and _classify_cause (via the "timed out" token) route it to transient,
+  # not fatal (§11). No BATCH_RESULT is fabricated; the branch keeps its commits.
+  if [ "$wrc" = "124" ]; then
+    printf 'THROUGHLINE_BUILD_TIMEOUT: build timed out at the overall watchdog (build-overall-timeout) (transient)\n' >> "$log"
+    return 124
+  fi
+  # Deadlock kill path: surface a SIGTERM-equivalent code → transient.
+  [ "$read_rc" -gt 128 ] && return 143
+  return "$wrc"   # 0 on a clean exit (BATCH_RESULT in the log); else claude's code
+}
+
 _build_one_gated() {  # <tdd> <log>
-  local tdd="$1" log="$2" bs _rc
-  build_one "$tdd" "$log"; _rc=$?
+  local tdd="$1" log="$2" slug bs _rc
+  slug="$(basename "$tdd" .md)"
+  # TDD 0020: the build runs as a multi-turn coprocess so the runner can review
+  # each Sequencing-item commit as it lands (FR-56). The verdict is still parsed
+  # from the mirrored log's BATCH_RESULT line, exactly as the single-shot path.
+  _per_step_review_loop "$slug" "$tdd" "$log"; _rc=$?
   [ "$_rc" -ne 0 ] && return "$_rc"
   bs="$(build_status "$log")"
   case "$bs" in *OK*) return 0 ;; esac

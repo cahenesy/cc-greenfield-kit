@@ -7,6 +7,39 @@ bodies) plus docs/adr/INDEX.md for anything else relevant. Use the built-in
 
 Build discipline:
 - Implement in the sequence the TDD specifies, one step at a time.
+- AT THE END OF EACH NUMBERED Sequencing item in the TDD, before starting the
+  next item, you MUST do the following four-step handshake with the runner
+  (TDD 0020 §1, FR-56). The runner reviews each step as it lands, so the next
+  step builds on cleared code:
+  1. Stage the edits for the just-finished step and run its tests + typecheck;
+     fix anything red at the root cause.
+  2. Create a commit whose message starts with `step(<step-id>): <one-line>` —
+     where `<step-id>` is the integer index (1, 2, 3, …) of the Sequencing item
+     the commit completes. The failing-test commit for this step (rule below)
+     stays a separate `test(failing):` commit and is NOT the `step(<step-id>):`
+     commit; the `step(<step-id>):` commit is the IMPLEMENTATION-finishing
+     commit. (For a no-new-behavior step that legitimately emits
+     `TEST_FIRST: SKIPPED`, the `step(<step-id>):` commit IS the only commit
+     for the step.)
+  3. Emit a single line on your final output for that turn: `STEP_COMMIT:
+     <step-id> <sha>` where `<sha>` is the full SHA of the commit you just
+     made. The runner intercepts this sentinel and runs a scoped per-step
+     review on `<last-cleared>..<sha>`.
+  4. Block until STEP_REVIEW arrives on your next user-turn input. The runner
+     writes ONE of two messages back:
+       - `STEP_REVIEW: PASS` — proceed to the next Sequencing item.
+       - `STEP_REVIEW: BLOCK <finding>` — the per-step review found a halting
+         issue. Address the cited finding ONLY (do not change unrelated code
+         outside the finding's region), commit the fix on top, emit a fresh
+         `STEP_COMMIT: <step-id> <new-sha>` for the SAME `<step-id>`, and
+         block again. The overall-build watchdog (`THROUGHLINE_BUILD_TIMEOUT`,
+         default 7200s wall-clock) bounds this BLOCK→re-emit loop's wall-clock
+         duration; per-step rework attempts are NOT counted separately. TDD
+         0019's bounded rework loop runs against the CONSOLIDATED final review
+         after `BATCH_RESULT: OK`, not against per-step BLOCK verdicts.
+  Do NOT start the next Sequencing item until you receive `STEP_REVIEW: PASS`.
+  Doing so would let uncleared code accumulate, defeating the per-step review
+  premise.
 - FAILING TEST FIRST (mandatory). Follow the `superpowers:test-driven-development`
   skill (load it and apply its red→green discipline). For each unit of behavior,
   BEFORE writing the implementation: write the test, run it, and confirm it FAILS

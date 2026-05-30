@@ -143,6 +143,18 @@ each implementation), lint/typecheck enforced at edit time, updates any docs the
 change makes stale IN THE SAME COMMIT
 (supersede accepted ADRs/design docs; edit evergreen docs in place), and commits.
 
+The build runs as a multi-turn `claude -p` coprocess (TDD 0020 §1). At the end of
+each Sequencing item, the build emits a `STEP_COMMIT: <step-id> <sha>` sentinel
+naming the integer step index and the implementation-finishing commit, then
+BLOCKS until the runner replies with `STEP_REVIEW: PASS` (proceed to next step)
+or `STEP_REVIEW: BLOCK <finding>` (rework the cited finding, then re-emit
+`STEP_COMMIT:` for the same step). The runner's `_per_step_review_loop` reads
+the sentinels off the build's stdout (stream-json) and writes the verdict to
+stdin. This makes review continuous and scoped per step rather than one
+end-of-build pass, so already-cleared code is never re-evaluated (FR-57). A
+build that never emits `STEP_COMMIT:` degrades gracefully to single-shot
+end-of-build review (the legacy shape).
+
 The build's own `BATCH_RESULT: OK` is NOT trusted as done. Before flipping a TDD
 to `implemented`, the runner enforces four independent gates:
 - **test-first** — the build must show failing-test-first discipline: a dedicated

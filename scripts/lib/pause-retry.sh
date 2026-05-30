@@ -113,6 +113,13 @@ _enter_paused() {
   rework_attempts="$(_read_fragment_raw_object "$f" rework_attempts)"
   rework_log="$(_read_fragment_raw_array "$f" rework_log)"
   build_attempt="$(_read_fragment_raw_object "$f" build_attempt)"
+  # TDD 0020: carry the cleared-step fields through the pause write — the
+  # subsequent set_halt_cause re-reads the fragment, so wiping them here (default
+  # null/[]) would lose them before set_halt_cause can carry them forward. A
+  # resumed build's per-step loop reads last_cleared_review_sha to scope its diff.
+  local last_cleared_sha cleared_step_log
+  last_cleared_sha="$(_read_fragment_field "$f" last_cleared_review_sha)"
+  cleared_step_log="$(_read_fragment_cleared_log "$f")"
   # Capture the build branch HEAD so resume can detect divergence (TDD 0011
   # failure mode: "Build branch HEAD differs at resume from what gates saw").
   branch_head_now="$(git rev-parse --verify HEAD 2>/dev/null || true)"
@@ -127,7 +134,8 @@ _enter_paused() {
     "${sta:-$now}" "$now" "$branch" "$pr_url" "$log_f" "${note:-paused ($cause)}" \
     "$cause" "$gates_csv" "$retries_json" "$branch_head_now" \
     "" "" "" "" \
-    "$rework_attempts" "$rework_log" "$build_attempt"; then
+    "$rework_attempts" "$rework_log" "$build_attempt" \
+    "$last_cleared_sha" "$cleared_step_log"; then
     echo "error: _enter_paused: could not write per-TDD fragment for $slug; not promoting to paused" >&2
     return 1
   fi
@@ -289,6 +297,11 @@ _append_retry() {
   rework_attempts="$(_read_fragment_raw_object "$f" rework_attempts)"
   rework_log="$(_read_fragment_raw_array "$f" rework_log)"
   build_attempt="$(_read_fragment_raw_object "$f" build_attempt)"
+  # TDD 0020: carry the cleared-step fields forward (a retry-audit append must
+  # not wipe last_cleared_review_sha / cleared_step_log).
+  local last_cleared_sha cleared_step_log
+  last_cleared_sha="$(_read_fragment_field "$f" last_cleared_review_sha)"
+  cleared_step_log="$(_read_fragment_cleared_log "$f")"
   local entry new
   entry="{\"gate\":\"$(json_escape "$gate_name")\",\"count\":$count,\"backoff_s\":$backoff}"
   # TDD 0011 / BL-5: validate that retries_json is well-formed before
@@ -318,7 +331,8 @@ _append_retry() {
     "${sta:-$(date +%s)}" "$(date +%s)" "$branch" "$pr_url" "$log_f" "$note" \
     "$paused_cause" "$gates_csv" "$new" "$branch_head" \
     "$halt_cause" "$halt_finding" "$halt_actions_csv" "$halt_detail" \
-    "$rework_attempts" "$rework_log" "$build_attempt"; then
+    "$rework_attempts" "$rework_log" "$build_attempt" \
+    "$last_cleared_sha" "$cleared_step_log"; then
     echo "error: _append_retry: could not write $slug fragment (retry audit lost)" >&2
     return 1
   fi

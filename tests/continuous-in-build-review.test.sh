@@ -560,6 +560,25 @@ EOF
   ! grep -q 'BATCH_RESULT' "$D/c9.log" 2>/dev/null && ok "no BATCH_RESULT fabricated" || bad "must not fabricate a BATCH_RESULT"
 ) || true
 
+# --- §3 / Sequencing step 3: build prompt teaches the per-step protocol ----
+echo "[D1] build-prompt.md instructs the author about STEP_COMMIT/STEP_REVIEW + step(<id>): commits"
+( cd "$REPO"
+  F="scripts/build-prompt.md"
+  grep -q 'STEP_COMMIT:'              "$F" && ok "names STEP_COMMIT sentinel"          || bad "build prompt must name the STEP_COMMIT sentinel (TDD 0020 §1)"
+  grep -q 'STEP_REVIEW:'              "$F" && ok "names STEP_REVIEW reply"             || bad "build prompt must describe the STEP_REVIEW reply contract"
+  grep -qE 'step\([^)]*step-id'       "$F" && ok "describes step(<step-id>): commits"  || bad "build prompt must instruct the step(<step-id>): commit prefix"
+  grep -qi 'block until\|wait.*STEP_REVIEW\|read.*STEP_REVIEW' "$F" && ok "tells the author to block on STEP_REVIEW" \
+    || bad "build prompt must tell the author to BLOCK until STEP_REVIEW arrives (otherwise the coprocess deadlocks)"
+  grep -qi 'next.*Sequencing\|next.*step' "$F" && ok "describes when to proceed to next step" \
+    || bad "build prompt must describe the 'do not start next step until PASS' contract"
+) || true
+
+echo "[D2] skills/implement/SKILL.md mentions the per-step protocol so the runtime contract is discoverable"
+( cd "$REPO"
+  F="skills/implement/SKILL.md"
+  grep -q 'STEP_COMMIT:' "$F" && ok "SKILL.md names STEP_COMMIT" || bad "SKILL.md should name the STEP_COMMIT sentinel so the runtime contract is discoverable"
+) || true
+
 echo
 PASS="$(grep -c '^ok$'   "$RESULTS" 2>/dev/null)"; PASS="${PASS:-0}"
 FAIL="$(grep -c '^fail$' "$RESULTS" 2>/dev/null)"; FAIL="${FAIL:-0}"

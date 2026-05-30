@@ -35,6 +35,7 @@ loses:
 | Re-running setup either re-does everything (slow) or skips silently (drift). | **Two markers, queried independently**: repo state in the committed `docs/.throughline-bootstrap.json`, per-developer environment in `${CLAUDE_PLUGIN_DATA}/<repo-id>/local.json`. Bootstrap is mechanically idempotent; a SessionStart hook auto-reconciles plugin updates without launching Claude. |
 | Token spend is "whatever the model picked." | The runtime-verify gate **tiers models by plan complexity**: mechanical observations (exit codes, log greps) run on sonnet; nontrivial plans (browser, judgment, multi-step) run on the build model. Mechanical pre-pass lint runs before the LLM design-reviewer, so the reviewer never spends tokens on what `grep` already proved. |
 | Engineering basics (TDD, worktrees, code review) are either reinvented per session or skipped. | Delegated **once** to the official plugins (superpowers, pr-review-toolkit). throughline owns the design-of-record and the gates; the plugins own the discipline that gates them. |
+| The same class of bug recurs build after build; nothing remembers. | Per-build findings are mined at run-end for **recurring categorical patterns** (a finding class that appeared across more than one TDD or build step). One batched accept/discard prompt; accepted classes persist to `docs/tdd/LEARNINGS.md` and surface as **advisory context** in future `/tdd-author` sessions whose scope intersects the learning's `files=[…]` / `tags=[…]` hints. |
 
 Put another way: plain Claude is a really good pair programmer in a closed room.
 throughline is the design doc, the code review, the CI gate, the audit trail, and
@@ -78,7 +79,11 @@ phases (`/prd-author`, `/tdd-author`, `/bootstrap-project`) pair well with
   violations, placeholder phrases — *before* spending model time on review),
   then the independent **design-critique gate** (a separate `claude -p` on a
   different model from the author), and opens the **design PR** (TDDs + ADRs,
-  with the critique verdict in the body).
+  with the critique verdict in the body). If a previous build produced
+  accepted recurring-pattern learnings in `docs/tdd/LEARNINGS.md`, `/tdd-author`
+  reads them and surfaces the ones whose `files=[…]` / `tags=[…]` hints
+  intersect the new TDD's scope as **advisory context** (never blocking) — a
+  signal "this class of issue has recurred in this project's prior builds."
 - **GitHub:** Human reviews and **merges the design PR.** *This merge is the
   build gate* — it lands the `draft` TDDs on `main`, which is what makes them
   buildable.
@@ -86,15 +91,28 @@ phases (`/prd-author`, `/tdd-author`, `/bootstrap-project`) pair well with
 
 **3. Build** — *fresh session, on `main`, pulled current*
 - `/implement` → confirms the queue (every TDD merged to `main` and not yet
-  `implemented`) and the mode, then launches a **detached** runner and hands
-  control back. Each TDD builds failing-test-first in a dedicated worktree and
-  must pass **four gates** before it flips to `implemented` and opens a
-  **feature PR**. It never merges.
+  `implemented`) and the mode, then launches a thin **harness-tracked watcher**
+  (`scripts/implement-watch.sh`) that in turn `nohup`s the **detached** runner —
+  the build survives session close, and the watcher's tracked completion
+  re-invokes your session when the run ends. Each TDD builds failing-test-first
+  in a dedicated worktree and must pass **four gates** before it flips to
+  `implemented` and opens a **feature PR**. It never merges.
 - **Watch it:** `/implement-status` prints a progress **snapshot** (current TDD,
   stage, an estimate-labeled %, per-TDD statuses, log/PR pointers); for a live,
   read-only watch it hands you a one-line `!…status.sh --follow` command to
   paste (Ctrl-C to exit — it never touches the build). You can also tail
-  `docs/tdd/.implement-logs/<ts>/report.md`.
+  `docs/tdd/.implement-logs/<ts>/report.md`. *Or* — because the watcher is
+  harness-tracked — just walk away; the session is auto-re-invoked at
+  run-completion with the run state and any pending learnings review.
+- **Run-end learnings review (if any candidates).** When the run completes, the
+  runner mines per-TDD findings for **recurring categorical patterns** (a
+  finding class that appeared across more than one TDD or build step) and
+  writes a candidates report. On session re-invocation, one batched
+  `AskUserQuestion` lets you accept or discard each class; accepted ones append
+  to `docs/tdd/LEARNINGS.md` (a `## L-NNN` entry per class, with
+  subject-area hints) and become advisory input to future `/tdd-author`
+  sessions per Step 2 above. Discarded candidates are not persisted; a run
+  with no recurring patterns skips the prompt silently.
 - **GitHub:** review and **merge the feature PR(s).** Sequential (default) PRs
   are *stacked* — merge **bottom-up in the report's "Merge plan" order**, with
   a merge-commit or rebase-merge (a squash breaks the stack; use
@@ -144,13 +162,15 @@ throughline/
 │   └── implement-status/     # /implement-status — progress snapshot of a live run
 ├── scripts/
 │   ├── implement.sh             # detached runner (fresh claude -p per TDD) + run-state record
+│   ├── implement-watch.sh       # thin harness-tracked watcher; nohups the runner, signals session re-invocation on completion
 │   ├── lib/
 │   │   ├── state.sh             # per-TDD / per-run JSON state-fragment I/O
 │   │   ├── pause-retry.sh       # pause/retry classification (rate-limit, transient, usage-limit)
 │   │   ├── gates.sh             # gate executors: build / verify / runtime-verify / review
 │   │   ├── resume.sh            # resume orchestration: re-enter paused state, pick gates to re-run
 │   │   ├── tdd-lint.sh          # mechanical pre-pass: structural lint + placeholder + traceability; --bounds runs the TDD-scope checks (doc size / per-file diff / touched-file count)
-│   │   └── plan-classifier.sh   # mechanical / nontrivial verification-plan heuristic (model tiering)
+│   │   ├── plan-classifier.sh   # mechanical / nontrivial verification-plan heuristic (model tiering)
+│   │   └── learnings.sh         # recurring-pattern detection over per-TDD findings + accepted-learning persistence to docs/tdd/LEARNINGS.md
 │   ├── build-prompt.md          # build discipline; delegates to superpowers:test-driven-development
 │   ├── review-prompt.md         # review gate: pr-review-toolkit + security-reviewer, separate process/model
 │   ├── ci-checks.sh                # mechanical gate: tests + typecheck + lint (CI's job)
@@ -168,7 +188,9 @@ throughline/
 │   ├── continuous-in-build-review.test.sh # eval: per-step scoped review
 │   ├── bounded-rework-loop.test.sh        # eval: in-invocation sonnet rework + budget
 │   ├── halt-taxonomy.test.sh              # eval: closed cause enum + one-screen context
-│   └── honest-reporting-self-review.test.sh # eval: severity tags + diff-grounded report
+│   ├── honest-reporting-self-review.test.sh # eval: severity tags + diff-grounded report
+│   ├── build-phase-learnings.test.sh      # eval: recurring-pattern detection + watcher liveness + LEARNINGS.md persistence
+│   └── accepted-learnings-inform-tdd-author.test.sh # eval: /tdd-author reads LEARNINGS.md + scope-matched advisory surfacing
 └── hooks/{hooks.json, format-and-lint.sh, post-update-reconcile.sh}
 ```
 
@@ -300,6 +322,32 @@ Findings are graded and reports are grounded:
   per-TDD verdict trail (every gate outcome, every rework attempt). What
   changed is what the diff says changed.
 
+## Build-phase learning capture
+
+Per-TDD findings carry structure (`severity`, `structural`, `pattern_tags`,
+`source` — plus rework cross-references). Throughline mines that structure at
+run-end for **recurring categorical patterns** — a finding class that appeared
+across more than one TDD or build step in this run — and surfaces them to the
+human as a single batched accept/discard prompt:
+
+- **Detection is the runner's job**, **review is yours.** The headless detached
+  runner cannot prompt mid-build, so detection writes a `candidate-learnings.json`
+  report and the harness-tracked watcher re-invokes your session at
+  run-completion. One `AskUserQuestion` (`multiSelect: true`) lets you accept or
+  discard each pattern class — *selected = accept, unselected = discard*. A run
+  with no recurring patterns skips the prompt silently.
+- **Accepted patterns persist** to `docs/tdd/LEARNINGS.md` as `## L-NNN`
+  entries — class summary, the TDDs it recurred in, and **subject-area hints**
+  (`files=[…]` glob/path set, `tags=[…]` set).
+- **The loop closes at `/tdd-author`.** When you author the next round of TDDs,
+  `/tdd-author` reads `LEARNINGS.md` and surfaces the entries whose hints
+  intersect each new TDD's scope as **advisory context**. Never blocking — a
+  signal that "this class of issue has recurred in this project's prior
+  builds." The author decides what, if anything, to adjust.
+
+The net effect: throughline learns from its own builds, but the human stays
+authoritative on what counts as a learning worth carrying forward.
+
 ## Verification is observation
 
 throughline treats *verification* — does the real artifact behave where a user
@@ -332,9 +380,16 @@ session:
   pointers. With no active run, it says so plainly.
 - **Live watch** — `/implement-status` also hands you a one-line
   `!bash …/scripts/status.sh --follow` command: a foreground, read-only view
-  that refreshes until you press Ctrl-C. It only *reads* the run-state record,
-  so the detached build is unaffected, and your session is intact when you
-  exit.
+  that refreshes until you press Ctrl-C (`SIGHUP`/`SIGQUIT` also stop a
+  non-interactive background launch; an optional `--max-seconds N` cap bounds
+  scripted/CI use without relying on signals). It only *reads* the run-state
+  record, so the detached build is unaffected, and your session is intact when
+  you exit.
+- **Auto-completion notification** — because the runner is launched by a
+  harness-tracked watcher (`scripts/implement-watch.sh`), you don't *have*
+  to poll. When the run terminates (done or paused), your session is
+  auto-re-invoked with `IMPLEMENT_RUN_COMPLETE` + the run state — and any
+  recurring-pattern learnings review (see Workflow §3) opens at that point.
 - **One-screen halt context** — when the run pauses for human attention, the
   status output shows the `halt_cause` (a value from a single closed enum)
   plus the TDD, the gate, the artifact pointer, and the action needed. No

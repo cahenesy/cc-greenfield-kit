@@ -58,6 +58,17 @@ extract_step0_block() {
   ' "$SKILL"
 }
 
+# Print the Step 0 short-circuit RE-APPLY block: the fenced ```bash block that
+# calls tl_gitignore_add_line but is neither the Step 0 read block
+# (tl_repo_marker_read) nor the "On completion" block (tl_repo_marker_write).
+extract_shortcircuit_block() {
+  awk '
+    /^```bash$/ { inblk=1; buf=""; next }
+    /^```$/     { if (inblk) { if (buf ~ /tl_gitignore_add_line/ && buf !~ /tl_repo_marker_write/ && buf !~ /tl_repo_marker_read/) { printf "%s", buf; exit } inblk=0; buf="" } next }
+    inblk       { buf = buf $0 "\n" }
+  ' "$SKILL"
+}
+
 # --- [A] the skill sources all three helpers ---------------------------------
 echo "[A] skill sources the three lib helpers"
 for lib in repo-id.sh markers.sh gitignore.sh; do
@@ -312,6 +323,36 @@ if [ -n "$init_n" ] && [ -n "$rec_n" ] && [ "$init_n" -lt "$rec_n" ]; then
 else
   bad "greenfield records markers before git init (init=$init_n rec=$rec_n) — aborts on a fresh repo"
 fi
+
+# --- [N] the short-circuit re-apply must guard its gitignore.sh source --------
+# Same principle as [L]/[J] for the already-bootstrapped path: when Step 0 finds
+# a prior marker it re-applies the cheap idempotent steps, sourcing gitignore.sh
+# and calling tl_gitignore_add_line. An unguarded source under a misconfigured
+# CLAUDE_PLUGIN_ROOT turns that into "command not found" and silently no-ops the
+# .gitignore re-apply (the path stops being ignored, with no signal). The block
+# must fail loudly instead, mirroring the "On completion" block's guarded source.
+# A bare unguarded `source` followed by tl_gitignore_add_line exits non-zero only
+# incidentally (the helper is "command not found", rc 127) — that is NOT a loud,
+# actionable failure. The contract is an explicit bootstrap-level diagnostic
+# naming the un-sourceable helper, exactly as the "On completion" for-loop emits.
+# So assert that diagnostic on stderr, not merely a non-zero exit.
+echo "[N] short-circuit re-apply fails loudly when gitignore.sh cannot be sourced"
+( blk="$(extract_shortcircuit_block)"
+  if [ -z "$blk" ]; then
+    bad "[N] no short-circuit re-apply block (tl_gitignore_add_line, no marker write/read) found"
+  else
+    R="$(mkrepo "$ROOT/n")"
+    # Plugin root with NO scripts/lib -> the gitignore.sh source fails.
+    EMPTY="$ROOT/n-empty"; mkdir -p "$EMPTY"
+    printf '%s' "$blk" > "$ROOT/n.sh"
+    err="$( ( cd "$R" && CLAUDE_PLUGIN_ROOT="$EMPTY" bash "$ROOT/n.sh" ) 2>&1 >/dev/null )"
+    if printf '%s\n' "$err" | grep -Eq 'could not source.*gitignore\.sh'; then
+      ok "re-apply emits a loud 'could not source ... gitignore.sh' diagnostic"
+    else
+      bad "re-apply gives no guarded diagnostic for an unsourceable gitignore.sh — silent .gitignore no-op (stderr: $err)"
+    fi
+  fi
+) || bad "[N] short-circuit source-failure case aborted before recording a verdict"
 
 echo
 PASS="$(grep -c '^ok$'   "$RESULTS" 2>/dev/null)"; PASS="${PASS:-0}"

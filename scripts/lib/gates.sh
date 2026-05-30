@@ -271,6 +271,22 @@ verify_runtime_one() {  # <tdd> <base-ref> <log>
 build_status()          { grep -aoE 'BATCH_RESULT: (OK|FAIL.*|BLOCKED.*)' "$1" 2>/dev/null | tail -1; }
 review_status()         { grep -aoE 'REVIEW_RESULT: (PASS|BLOCK.*)' "$1" 2>/dev/null | tail -1; }
 verify_runtime_status() { grep -aoE 'VERIFY_RUNTIME: (PASS|FAIL.*|BLOCKED.*|SKIP.*)' "$1" 2>/dev/null | tail -1; }
+
+# _fresh_review_verdict <log> <pre-log-size> (review-rerun-1 robustness) —
+# echo the first REVIEW_RESULT line in the log slice AFTER <pre-log-size>
+# bytes, or empty if none. Used by _rework_loop to tell a fresh BLOCK
+# verdict (legitimate rework trigger) from a fatal claude crash (no
+# verdict this pass). The regex accepts optional leading backticks /
+# whitespace because reviewers commonly emit the verdict as markdown
+# inline code or fenced. Anchor preserved: REVIEW_RESULT must START a
+# line (modulo the leading marker chars), so prose mentioning the
+# sentinel mid-line is not picked up.
+_fresh_review_verdict() {  # <log> <pre-log-size>
+  local log="$1" pre="$2"
+  tail -c +"$((pre + 1))" "$log" 2>/dev/null \
+    | grep -aE '^[`[:space:]]*REVIEW_RESULT:' \
+    | tail -1
+}
 run_ci_checks()    { bash "$CI_CHECKS" >>"$1" 2>&1; }
 # test-first gate: mechanical, git-history only. The build must show failing-test-
 # first discipline — a dedicated `test(failing): ...` commit BEFORE the impl —
@@ -928,7 +944,7 @@ _rework_loop() {  # <slug> <tdd> <rbase> <log>
     # legitimate rework trigger); if not, claude crashed silently (fail the
     # gate). The retries-recorded check stays for diagnostic clarity but
     # becomes a refinement of the fail path, not the only fail trigger.
-    verdict_in_new="$(tail -c +"$((pre_log_size + 1))" "$log" 2>/dev/null | grep -aE '^REVIEW_RESULT:' | tail -1)"
+    verdict_in_new="$(_fresh_review_verdict "$log" "$pre_log_size")"
     if [ "$rrc" -ne 0 ] && [ -z "$verdict_in_new" ]; then
       _retries_json="$(_read_fragment_raw_array "${STATE_DIR:-}/$slug.json" retries 2>/dev/null)"
       if [ -n "$_retries_json" ] && [ "$_retries_json" != "[]" ]; then

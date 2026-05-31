@@ -182,7 +182,8 @@ throughline/
 │   ├── run-recovery.test.sh               # eval: detached run recovery (paused / resume)
 │   ├── token-spend-reduction.test.sh      # eval: lint + classifier + runtime-verify tiering
 │   ├── build-observability.test.sh        # eval: session pointer + log conventions
-│   ├── install-update-lifecycle.test.sh   # eval: two markers + SessionStart reconcile + idempotent re-run
+│   ├── repo-id / markers / gitignore-helper / bootstrap-marker-wiring /
+│   │     releases-manifest / session-reconcile-hook .test.sh  # evals: two markers + idempotent re-run + SessionStart reconcile + release-impact notice
 │   ├── interactive-draft-persistence.test.sh # eval: draft files written after every elicitation
 │   ├── bounded-tdd-scope.test.sh          # eval: expected-diff-size + touched-files bounds
 │   ├── continuous-in-build-review.test.sh # eval: per-step scoped review
@@ -191,7 +192,7 @@ throughline/
 │   ├── honest-reporting-self-review.test.sh # eval: severity tags + diff-grounded report
 │   ├── build-phase-learnings.test.sh      # eval: recurring-pattern detection + watcher liveness + LEARNINGS.md persistence
 │   └── accepted-learnings-inform-tdd-author.test.sh # eval: /tdd-author reads LEARNINGS.md + scope-matched advisory surfacing
-└── hooks/{hooks.json, format-and-lint.sh, post-update-reconcile.sh}
+└── hooks/{hooks.json, format-and-lint.sh, throughline-session-reconcile.sh}
 ```
 
 ## The pipeline at a glance
@@ -561,7 +562,7 @@ Bootstrap a new project (or re-bootstrap an existing one — it's idempotent):
 If you want to run the eval suites locally before relying on the gates:
 
 ```
-chmod +x hooks/format-and-lint.sh hooks/post-update-reconcile.sh \
+chmod +x hooks/format-and-lint.sh hooks/throughline-session-reconcile.sh \
          scripts/implement.sh scripts/ci-checks.sh scripts/status.sh
 bash tests/implement-gate.test.sh
 bash tests/run-recovery.test.sh

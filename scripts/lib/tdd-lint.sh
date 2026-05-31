@@ -328,7 +328,7 @@ EOF
 #
 # Three bounds, each env-overridable (matching the THROUGHLINE_REVIEW_MODEL /
 # THROUGHLINE_RUNTIME_VERIFY_MODEL pattern from TDD 0013):
-#   THROUGHLINE_TDD_MAX_LINES      default 350  (TDD body size)
+#   THROUGHLINE_TDD_MAX_LINES      default 500  (TDD body size)
 #   THROUGHLINE_TDD_MAX_FILE_DIFF  default 300  (per-touched-file diff estimate)
 #   THROUGHLINE_TDD_MAX_TOUCHED    default 8    (touched-file count)
 # A non-positive (or non-integer) value SKIPS that bound entirely — the escape
@@ -355,7 +355,7 @@ check_tdd_doc_size() {  # <tdd-path>
     echo "tdd-lint: doc-size: input not found: $f" >&2
     return 2
   fi
-  local max="${THROUGHLINE_TDD_MAX_LINES:-350}"
+  local max="${THROUGHLINE_TDD_MAX_LINES:-500}"
   _tl_bound_active "$max" || return 0   # non-positive / non-int → skip
 
   local n awk_rc

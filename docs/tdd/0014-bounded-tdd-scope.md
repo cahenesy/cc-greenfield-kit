@@ -38,10 +38,7 @@ Initial bound values, calibrated from the existing TDD set:
 
 The cut between clean and troubled is in the 330–500-line range, so:
 
-- `THROUGHLINE_TDD_MAX_LINES` — default **350**. TDD doc body (excluding
-  frontmatter) above this triggers the refusal flow. Clears the clean set,
-  rejects the troubled set, gives ~20 lines of margin over the largest clean
-  TDD (0009 at 330).
+- `THROUGHLINE_TDD_MAX_LINES` — default **500** (raised from 350 post-implementation per empirical TDD-size distribution across the first 25 TDDs; protocol-design TDDs in the 350–500 band reviewed cleanly without scope objections, so the original 350 was forcing routine `## Scope override` use on substantive designs). TDD doc body (excluding frontmatter) above this triggers the refusal flow.
 - `THROUGHLINE_TDD_MAX_FILE_DIFF` — default **300**. Per-touched-file
   expected-diff-size declaration above this triggers refusal unless a justified
   exception is recorded against that file.
@@ -228,7 +225,7 @@ scope-coherence` line emitted by the design-reviewer subagent.
    TDD file with a body of 500 lines (over the 350-line default), invoke
    `/tdd-author` against it. Expect: the skill emits the three-option
    `AskUserQuestion` prompt, with the question text containing the literal
-   string `PRECHECK_FAIL: tdd-doc-size 500 > 350`.
+   string `PRECHECK_FAIL: tdd-doc-size 700 > 500`.
 2. **Per-file diff violation without exception triggers refusal.** Author a
    fixture TDD whose `## Expected diff size` section declares
    `- scripts/foo.sh — 500 lines` (no `(exception:)` marker). Invoke

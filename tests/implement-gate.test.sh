@@ -404,4 +404,15 @@ if [ -f "$RR" ]; then
   bash "$RR" || RR_FAIL=1
 fi
 
-[ "$FAIL" -eq 0 ] && [ "$RPV_FAIL" -eq 0 ] && [ "$TSR_FAIL" -eq 0 ] && [ "$BTS_FAIL" -eq 0 ] && [ "$SMS_FAIL" -eq 0 ] && [ "$PRM_FAIL" -eq 0 ] && [ "$GRM_FAIL" -eq 0 ] && [ "$BRL_FAIL" -eq 0 ] && [ "$RR_FAIL" -eq 0 ]
+# Run the build-coprocess-lifecycle eval (TDD 0025 / FR-56 mechanism) as part
+# of the same suite — it pins the stdin-close-on-BATCH_RESULT lifecycle so a
+# regression deadlocks here (rc=143 in the eval) instead of in a real build
+# (where the symptom is `paused: transient` after the inter-event watchdog).
+BCL="$(dirname "$0")/build-coprocess-lifecycle.test.sh"
+BCL_FAIL=0
+if [ -f "$BCL" ]; then
+  echo
+  bash "$BCL" || BCL_FAIL=1
+fi
+
+[ "$FAIL" -eq 0 ] && [ "$RPV_FAIL" -eq 0 ] && [ "$TSR_FAIL" -eq 0 ] && [ "$BTS_FAIL" -eq 0 ] && [ "$SMS_FAIL" -eq 0 ] && [ "$PRM_FAIL" -eq 0 ] && [ "$GRM_FAIL" -eq 0 ] && [ "$BRL_FAIL" -eq 0 ] && [ "$RR_FAIL" -eq 0 ] && [ "$BCL_FAIL" -eq 0 ]

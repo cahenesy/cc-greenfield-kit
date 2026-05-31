@@ -47,15 +47,18 @@ make_repo() {  # <dir> <plugin-root> [applied] [seen] [data-dir]
   printf '# Docs\n' > "$d/docs/README.md"
   git -C "$d" init -q; git -C "$d" config user.email t@t.t; git -C "$d" config user.name t
   if [ -n "$applied" ]; then
-    ( cd "$d" && CLAUDE_PLUGIN_ROOT="$pr" source "$pr/scripts/lib/repo-id.sh" \
-        && source "$pr/scripts/lib/markers.sh" \
-        && tl_repo_marker_write "$applied" shell scaffold ) >/dev/null 2>&1
+    # export, not a per-command prefix: the prefix form would scope the env var
+    # to `source` alone, leaving the write helper to run without it.
+    ( cd "$d" && export CLAUDE_PLUGIN_ROOT="$pr"
+      source "$pr/scripts/lib/repo-id.sh"
+      source "$pr/scripts/lib/markers.sh"
+      tl_repo_marker_write "$applied" shell scaffold ) >/dev/null 2>&1
   fi
   if [ -n "$seen" ] && [ -n "$data" ]; then
-    ( cd "$d" && CLAUDE_PLUGIN_ROOT="$pr" CLAUDE_PLUGIN_DATA="$data" \
-        source "$pr/scripts/lib/repo-id.sh" \
-        && source "$pr/scripts/lib/markers.sh" \
-        && tl_local_marker_write "$seen" deps_installed ) >/dev/null 2>&1
+    ( cd "$d" && export CLAUDE_PLUGIN_ROOT="$pr" CLAUDE_PLUGIN_DATA="$data"
+      source "$pr/scripts/lib/repo-id.sh"
+      source "$pr/scripts/lib/markers.sh"
+      tl_local_marker_write "$seen" deps_installed ) >/dev/null 2>&1
   fi
   git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm init >/dev/null 2>&1
 }

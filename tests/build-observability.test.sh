@@ -33,10 +33,12 @@ VERIFY_PROMPT="$REPO/scripts/verify-runtime-prompt.md"
 FIXTURE="$REPO/tests/fixtures/build-observability/session.jsonl"
 
 RESULTS="$(mktemp)"; export RESULTS
+ROOT="$(mktemp -d)"
+# Single EXIT trap covering BOTH temp artifacts so neither orphans in $TMPDIR
+# if the suite is killed (SIGINT/SIGTERM) or exits before the summary block.
+trap 'rm -rf "$ROOT" "$RESULTS"' EXIT
 ok()  { printf 'ok\n'   >>"$RESULTS"; printf '  ok   — %s\n' "$1"; }
 bad() { printf 'fail\n' >>"$RESULTS"; printf '  FAIL — %s\n' "$1"; }
-
-ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
 
 # record_session_pointer resolves the session JSONL from $HOME + $PWD via Claude
 # Code's project-dir encoding (/a/b -> ~/.claude/projects/-a-b/). We source the
@@ -138,6 +140,5 @@ echo "[6] verify-runtime-prompt.md carries the Cleanup safety paragraph"
 echo
 PASS="$(grep -c '^ok$'   "$RESULTS" 2>/dev/null)"; PASS="${PASS:-0}"
 FAIL="$(grep -c '^fail$' "$RESULTS" 2>/dev/null)"; FAIL="${FAIL:-0}"
-rm -f "$RESULTS"
 echo "=== build-observability eval: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

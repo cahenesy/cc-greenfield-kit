@@ -62,18 +62,25 @@ This TDD changes ONLY 0020's "Build subprocess protocol" subsection:
 ### 1. `_per_step_review_loop` stdin-close on BATCH_RESULT — `scripts/lib/gates.sh`
 
 The read loop's inner case branch (matching `_extract_event_text $evt` against
-`*"BATCH_RESULT: "*`) closes the runner-side end of the build's stdin fd
-immediately:
+`*"BATCH_RESULT: "*`) closes the runner-side end of the build's stdin pipe
+immediately. **Two parent-side write ends must close**: the dup'd
+`${build_in}` AND the coproc's original `${BUILD[1]}`. Bash's `coproc`
+assigns the pipe's write end to `${BUILD[1]}`; the setup line
+`exec {build_in}>&"${BUILD[1]}"` creates a SECOND fd pointing to the same
+pipe. EOF on the coproc's stdin requires both parent-side write ends to be
+closed — closing only one leaves the other holding the pipe open.
 
 ```bash
 *"BATCH_RESULT: "*)
   # Stream-json input-mode lifecycle (TDD 0025): claude -p does not self-
   # terminate on end_turn; it blocks reading stdin for the next user turn
-  # until EOF. Close our writer so the build sees EOF and exits cleanly
-  # (rc=0). Without this, the build sits idle until the inter-event
-  # watchdog kills it (143 → transient → pause), discarding the OK we
-  # just observed.
+  # until EOF. Close BOTH parent-side write ends of the build's stdin pipe
+  # — our dup'd ${build_in} AND the coproc's original ${BUILD[1]} — so the
+  # build sees EOF and exits cleanly (rc=0). Closing only one leaves the
+  # other holding the pipe open, so the build keeps blocking and the
+  # inter-event watchdog kills it (143 → transient → pause).
   exec {build_in}>&- 2>/dev/null || true
+  exec {BUILD[1]}>&- 2>/dev/null || true
   ;;
 ```
 
@@ -83,8 +90,10 @@ loop keeps reading until the build's stdout closes naturally.
 **Liveness — proof the loop terminates.** The fix only works if the read
 loop actually exits after the stdin close. Causal chain:
 
-- (a) Inner case matches → `exec {build_in}>&-` closes the runner-side
-  write end of the build's stdin pipe.
+- (a) Inner case matches → BOTH `exec {build_in}>&-` AND
+  `exec {BUILD[1]}>&-` close. With both parent-side write ends closed
+  (the dup'd fd + the coproc's original fd), the kernel sees no remaining
+  writers on the pipe.
 - (b) Kernel propagates EOF on the build's read side. `claude -p
   --input-format stream-json` consumes one JSON event per line on
   stdin and exits on stdin EOF after flushing pending output (per

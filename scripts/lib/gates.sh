@@ -539,7 +539,20 @@ _per_step_review_loop() {  # <slug> <tdd> <log>
               printf '%s\n' "$(_user_turn_json "$verdict")" 1>&"${build_in}" 2>/dev/null || true
             fi
             ;;
-          *"BATCH_RESULT: "*) : ;;   # mirrored above; keep draining to EOF for the full final turn
+          *"BATCH_RESULT: "*)
+            # TDD 0025 §1 — stream-json input-mode lifecycle. `claude -p
+            # --input-format stream-json` does NOT self-terminate on `end_turn`;
+            # it blocks reading stdin for the next user-turn JSON until EOF.
+            # Close BOTH parent-side write ends of the build's stdin pipe — our
+            # dup'd ${build_in} AND the coproc's original ${BUILD[1]} — so the
+            # build sees EOF and exits cleanly (rc=0). Closing only one leaves
+            # the other holding the pipe open, so the build keeps blocking and
+            # the inter-event watchdog kills it (143 → transient → pause).
+            # Continue (no `break`) — the read loop drains any tail events
+            # until the build's stdout closes naturally.
+            exec {build_in}>&- 2>/dev/null || true
+            exec {BUILD[1]}>&- 2>/dev/null || true
+            ;;
         esac
         ;;
       *)

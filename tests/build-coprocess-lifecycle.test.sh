@@ -139,8 +139,10 @@ echo "[VP5] BATCH_RESULT: FAIL preserved — synth-OK does NOT fire"
 ) || true
 
 # --- report ----------------------------------------------------------------
-n_ok=$(grep -c '^ok$' "$RESULTS" 2>/dev/null || echo 0)
-n_fail=$(grep -c '^fail$' "$RESULTS" 2>/dev/null || echo 0)
+# grep -c exits non-zero when there are zero matches; suppress that so the
+# `0 failed` happy path doesn't leak its exit code through pipefail.
+n_ok=$(grep -c '^ok$' "$RESULTS" 2>/dev/null); n_ok=${n_ok:-0}
+n_fail=$(grep -c '^fail$' "$RESULTS" 2>/dev/null); n_fail=${n_fail:-0}
 echo
 printf 'build-coprocess-lifecycle: %s passed, %s failed\n' "$n_ok" "$n_fail"
-[ "$n_fail" = "0" ]
+[ "$n_fail" -eq 0 ]
